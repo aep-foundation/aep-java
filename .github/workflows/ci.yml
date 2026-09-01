@@ -30,6 +30,6 @@ jobs:
 
       - run: ./mvnw --batch-mode --no-transfer-progress verify
 
-      - name: Verify clean BOM consumer
+      - name: Verify clean BOM consumers
         if: matrix.java == '17'
         run: ./scripts/verify-consumer.sh

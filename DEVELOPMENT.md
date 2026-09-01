@@ -17,7 +17,8 @@ Run the complete repository gate before merging:
 The Maven gate compiles all modules, runs tests, enforces dependency convergence and formatting,
 and runs Checkstyle, PMD, copy-paste detection, SpotBugs, and JaCoCo reporting. The consumer check
 installs the reactor into an isolated temporary repository and proves that a project can import
-`aep-bom` and omit versions from its AEP module dependencies.
+`aep-bom`, omit versions from its AEP module dependencies, and execute the public JSON API with
+either Jackson 2 or Jackson 3.
 
 Format Java sources with:
 
