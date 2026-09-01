@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java:
+          - "17"
+          - "21"
+          - "25"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+
+      - run: ./mvnw --batch-mode --no-transfer-progress verify
+
+      - name: Verify clean BOM consumer
+        if: matrix.java == '17'
+        run: ./scripts/verify-consumer.sh
