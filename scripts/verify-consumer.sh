@@ -32,15 +32,21 @@ if [ "${AEP_CONSUMER_SOURCE:-local}" = "local" ]; then
 
   install_artifact "$root/pom.xml" "$root/pom.xml"
   install_artifact "$root/aep-bom/pom.xml" "$root/aep-bom/pom.xml"
-  for artifact in aep-core aep-json-jackson2 aep-agent aep-service aep-platform; do
+  for artifact in aep-core aep-json-jackson2 aep-json-jackson3 aep-agent aep-service aep-platform; do
     install_artifact \
       "$root/$artifact/target/$artifact-$version.jar" \
       "$root/$artifact/pom.xml"
   done
 fi
 
-"$root/mvnw" --batch-mode --no-transfer-progress \
-  --file "$root/testdata/consumer/pom.xml" \
-  -Dmaven.repo.local="$repository" \
-  -Daep.version="$version" \
-  verify
+verify_consumer() {
+  "$root/mvnw" --batch-mode --no-transfer-progress \
+    --file "$root/testdata/consumer/pom.xml" \
+    -Dmaven.repo.local="$repository" \
+    -Daep.version="$version" \
+    "$@" \
+    verify
+}
+
+verify_consumer
+verify_consumer -Pjackson3

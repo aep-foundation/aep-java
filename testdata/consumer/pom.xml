@@ -29,10 +29,6 @@
   <dependencies>
     <dependency>
       <groupId>foundation.aep</groupId>
-      <artifactId>aep-json-jackson2</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>foundation.aep</groupId>
       <artifactId>aep-agent</artifactId>
     </dependency>
     <dependency>
@@ -52,6 +48,47 @@
         <artifactId>maven-compiler-plugin</artifactId>
         <version>3.15.0</version>
       </plugin>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.6.3</version>
+        <executions>
+          <execution>
+            <id>verify-public-api</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>java</goal>
+            </goals>
+            <configuration>
+              <mainClass>foundation.aep.example.Consumer</mainClass>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <profile>
+      <id>jackson2</id>
+      <activation>
+        <activeByDefault>true</activeByDefault>
+      </activation>
+      <dependencies>
+        <dependency>
+          <groupId>foundation.aep</groupId>
+          <artifactId>aep-json-jackson2</artifactId>
+        </dependency>
+      </dependencies>
+    </profile>
+    <profile>
+      <id>jackson3</id>
+      <dependencies>
+        <dependency>
+          <groupId>foundation.aep</groupId>
+          <artifactId>aep-json-jackson3</artifactId>
+        </dependency>
+      </dependencies>
+    </profile>
+  </profiles>
 </project>
