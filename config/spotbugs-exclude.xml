@@ -1,2 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<FindBugsFilter />
+<FindBugsFilter>
+  <!-- These values defensively copy collections and expose only immutable AEP value objects. -->
+  <Match>
+    <Class name="~foundation\.aep\.core\.(AepHttpTransport\$(Request|Response)|ClaimSupport\$Evaluation|ClaimValues|EnrollRequest|EnrollResponse|GrantRequest|GrantResponses\$.*|InspectDocument\$.*|ProblemDetails|StatusResponse)" />
+    <Bug pattern="EI_EXPOSE_REP,EI_EXPOSE_REP2" />
+  </Match>
+</FindBugsFilter>
