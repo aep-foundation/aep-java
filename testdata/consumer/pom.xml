@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>foundation.aep.example</groupId>
+  <artifactId>aep-java-consumer</artifactId>
+  <version>1.0.0</version>
+
+  <properties>
+    <aep.version>0.1.0-SNAPSHOT</aep.version>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>foundation.aep</groupId>
+        <artifactId>aep-bom</artifactId>
+        <version>${aep.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <dependency>
+      <groupId>foundation.aep</groupId>
+      <artifactId>aep-json-jackson2</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>foundation.aep</groupId>
+      <artifactId>aep-agent</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>foundation.aep</groupId>
+      <artifactId>aep-service</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>foundation.aep</groupId>
+      <artifactId>aep-platform</artifactId>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.15.0</version>
+      </plugin>
+    </plugins>
+  </build>
+</project>
