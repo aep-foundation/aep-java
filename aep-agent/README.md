@@ -30,6 +30,38 @@ Production identity providers should scope identities by Service, protect signin
 the same identity for repeated calls. Production credential stores should encrypt credentials at
 rest and make replacement, expiry, and revocation atomic.
 
+## Use a hosted identity Platform
+
+`PlatformIdentityProvider` implements the Agent identity boundary against an AEP Platform. It
+discovers the Platform anonymously, recovers an active identity for the Service DID or provisions
+one, and delegates client-assertion signing without exposing private key material:
+
+```java
+PlatformIdentityProvider identities = PlatformIdentityProvider
+    .builder(URI.create("https://platform.example"))
+    .transport(httpTransport)
+    .authenticationHeaders(() -> platformAccessToken()
+        .thenApply(token -> Map.of("Authorization", List.of("Bearer " + token))))
+    .build();
+
+AepAgent agent = AepAgent.builder()
+    .inspectTransport(httpTransport)
+    .commandTransport(httpTransport)
+    .identityProvider(identities)
+    .build();
+```
+
+Authentication headers are resolved for every private Platform request so an application can
+refresh an expiring access token. They are never sent to Platform Discovery. The provider honors
+Discovery freshness and validators, recovers identities through the advertised list endpoint, and
+uses a distinct idempotency key for provisioning and each Sign stage.
+
+A Platform can return a pending Sign response when Owner approval or custody work is required. By
+default, the signing stage fails with `PlatformSignPendingException`, which exposes the pending
+context and retry interval. Configure `pendingSignResolver` to wait or obtain approval and return
+the opaque Platform context for the next Sign stage. Configure `platformContext` when the Platform
+requires initial authorization or custody input. Neither context is copied into assertion claims.
+
 ## Enroll and request a credential
 
 Inspect before presenting claims so the application can obtain the Service's advertised required,

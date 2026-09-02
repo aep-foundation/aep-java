@@ -2,6 +2,7 @@ package foundation.aep.example;
 
 import foundation.aep.agent.AepAgent;
 import foundation.aep.agent.AgentIdentity;
+import foundation.aep.agent.PlatformIdentityProvider;
 import foundation.aep.core.AepJson;
 import foundation.aep.core.RevokeResponse;
 import foundation.aep.httpserver.AepHttpServer;
@@ -22,6 +23,13 @@ public final class Consumer {
         requirePublicType(AepHttpServer.class);
         requirePublicType(AepServlet.class);
         requirePublicType(AepSpringWebMvc.class);
+        requirePublicType(PlatformIdentityProvider.class);
+
+        PlatformIdentityProvider hostedIdentities = PlatformIdentityProvider
+                .builder(URI.create("https://platform.example"))
+                .transport(request -> CompletableFuture.failedFuture(new UnsupportedOperationException()))
+                .build();
+        requirePublicType(hostedIdentities.getClass());
 
         AepAgent agent = AepAgent.builder()
                 .inspectTransport(request -> CompletableFuture.failedFuture(new UnsupportedOperationException()))

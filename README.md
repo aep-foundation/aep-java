@@ -14,7 +14,7 @@ Service-issued credentials, and authenticated Agent access.
 | -------------------------------------------------- | ---------------------------------------------------- |
 | Align compatible AEP dependency versions          | [`aep-bom`](./aep-bom/README.md)                     |
 | Use protocol contracts and validation directly    | [`aep-core`](./aep-core/README.md)                   |
-| Inspect, enroll with, and authenticate to Services | [`aep-agent`](./aep-agent/README.md)                 |
+| Inspect, enroll with, authenticate to Services, and use hosted identities | [`aep-agent`](./aep-agent/README.md) |
 | Integrate enrollment into a Service                | [`aep-service`](./aep-service/README.md)             |
 | Expose a Service with the JDK HTTP server          | [`aep-httpserver`](./aep-httpserver/README.md)       |
 | Expose a Service with Jakarta Servlet              | [`aep-servlet`](./aep-servlet/README.md)             |
