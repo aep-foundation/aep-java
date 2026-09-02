@@ -14,30 +14,16 @@ version=$(
     -q
 )
 
-if [ "${AEP_CONSUMER_SOURCE:-local}" = "local" ]; then
-  "$root/mvnw" --batch-mode --no-transfer-progress \
-    --file "$root/pom.xml" \
-    -DskipTests \
-    package
-
-  install_artifact() {
-    file=$1
-    pom=$2
-    "$root/mvnw" --batch-mode --no-transfer-progress \
-      org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
-      -Dfile="$file" \
-      -DpomFile="$pom" \
-      -DlocalRepositoryPath="$repository"
-  }
-
-  install_artifact "$root/pom.xml" "$root/pom.xml"
-  install_artifact "$root/aep-bom/pom.xml" "$root/aep-bom/pom.xml"
-  for artifact in aep-core aep-json-jackson2 aep-json-jackson3 aep-agent aep-service aep-httpserver aep-servlet aep-spring-webmvc aep-platform; do
-    install_artifact \
-      "$root/$artifact/target/$artifact-$version.jar" \
-      "$root/$artifact/pom.xml"
-  done
-fi
+case "${AEP_CONSUMER_SOURCE:-local}" in
+  local)
+    "$root/scripts/install-consumer-artifacts.sh" "$repository" "$version"
+    ;;
+  central) ;;
+  *)
+    echo "AEP_CONSUMER_SOURCE must be local or central." >&2
+    exit 2
+    ;;
+esac
 
 verify_consumer() {
   "$root/mvnw" --batch-mode --no-transfer-progress \

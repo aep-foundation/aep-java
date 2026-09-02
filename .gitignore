@@ -1,4 +1,5 @@
 .DS_Store
+.gradle/
 .conformance/
 .interop/
 .idea/
@@ -8,4 +9,5 @@
 .vscode/
 target/
 **/target/
+build/
 *.iml

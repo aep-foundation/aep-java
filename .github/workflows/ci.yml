@@ -40,11 +40,21 @@ jobs:
           java-version: ${{ matrix.java }}
           cache: maven
 
+      - name: Set up Gradle
+        if: matrix.java == '17'
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "9.5.1"
+
       - run: ./mvnw --batch-mode --no-transfer-progress verify
 
       - name: Verify clean BOM consumers
         if: matrix.java == '17'
         run: ./scripts/verify-consumer.sh
+
+      - name: Verify clean Gradle BOM consumers
+        if: matrix.java == '17'
+        run: ./scripts/verify-gradle-consumer.sh
 
       - name: Verify Spring Framework 7 compatibility
         if: matrix.java == '17'

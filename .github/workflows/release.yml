@@ -1,0 +1,199 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: aep-java-release
+  cancel-in-progress: false
+
+permissions:
+  attestations: write
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    if: github.repository == 'aep-foundation/aep-java'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Releases must run from main." >&2
+            exit 1
+          fi
+          version=$(./mvnw --batch-mode --no-transfer-progress help:evaluate -Dexpression=project.version -DforceStdout -q)
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "The project version must be a stable semantic version such as 0.1.0." >&2
+            exit 1
+          fi
+          tag="v$version"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists." >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            tag_commit=$(git rev-list -n 1 "$tag")
+            if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
+              echo "Tag $tag does not identify the selected main commit." >&2
+              exit 1
+            fi
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          artifact="https://repo1.maven.org/maven2/foundation/aep/aep-core/$version/aep-core-$version.pom"
+          if curl --fail --silent --show-error --head "$artifact" >/dev/null; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out AEP specifications
+        uses: actions/checkout@v7
+        with:
+          repository: aep-foundation/aep-specs
+          path: .conformance/aep-specs
+
+      - name: Check out Node.js reference implementation
+        uses: actions/checkout@v7
+        with:
+          repository: aep-foundation/aep-node
+          path: .conformance/aep-node
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: .conformance/aep-specs/ietf
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          server-id: central
+          server-username-env-var: CENTRAL_USERNAME
+          server-password-env-var: CENTRAL_PASSWORD
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "9.5.1"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.1.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install Node.js reference implementation
+        run: pnpm --dir .conformance/aep-node install --frozen-lockfile
+
+      - name: Verify release
+        run: ./mvnw --batch-mode --no-transfer-progress verify
+
+      - name: Verify Spring Framework 7 compatibility
+        run: ./mvnw --batch-mode --no-transfer-progress -pl aep-spring-webmvc -am -Pspring7 verify
+
+      - name: Run shared conformance harness
+        run: ./scripts/run-conformance.sh
+        env:
+          AEP_SPECS_DIR: .conformance/aep-specs
+
+      - name: Run Node.js interoperability
+        run: ./scripts/run-node-interoperability.sh
+        env:
+          AEP_NODE_DIR: .conformance/aep-node
+
+      - name: Verify clean Maven BOM consumers
+        run: ./scripts/verify-consumer.sh
+
+      - name: Verify clean Gradle BOM consumers
+        run: ./scripts/verify-gradle-consumer.sh
+
+      - name: Inspect release artifacts
+        run: ./scripts/verify-release-artifacts.sh
+
+      - name: Publish Maven artifacts
+        if: steps.release.outputs.published != 'true'
+        run: ./mvnw --batch-mode --no-transfer-progress -Prelease -Dgpg.signer=bc deploy
+        env:
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          MAVEN_GPG_KEY: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+
+      - name: Attest Maven artifacts
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            aep-core/target/aep-core-${{ steps.release.outputs.version }}*.jar
+            aep-json-jackson2/target/aep-json-jackson2-${{ steps.release.outputs.version }}*.jar
+            aep-json-jackson3/target/aep-json-jackson3-${{ steps.release.outputs.version }}*.jar
+            aep-agent/target/aep-agent-${{ steps.release.outputs.version }}*.jar
+            aep-service/target/aep-service-${{ steps.release.outputs.version }}*.jar
+            aep-httpserver/target/aep-httpserver-${{ steps.release.outputs.version }}*.jar
+            aep-servlet/target/aep-servlet-${{ steps.release.outputs.version }}*.jar
+            aep-spring-webmvc/target/aep-spring-webmvc-${{ steps.release.outputs.version }}*.jar
+            aep-platform/target/aep-platform-${{ steps.release.outputs.version }}*.jar
+
+      - name: Wait for Maven Central availability
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          artifact="https://repo1.maven.org/maven2/foundation/aep/aep-core/$VERSION/aep-core-$VERSION.pom"
+          for attempt in {1..60}; do
+            if curl --fail --silent --show-error --head "$artifact" >/dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Maven Central did not expose $artifact within 10 minutes." >&2
+          exit 1
+
+      - name: Verify Maven Central consumer
+        run: ./scripts/verify-consumer.sh
+        env:
+          AEP_CONSUMER_SOURCE: central
+
+      - name: Verify Maven Central Gradle consumer
+        run: ./scripts/verify-gradle-consumer.sh
+        env:
+          AEP_CONSUMER_SOURCE: central
+
+      - name: Create release tag
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          if git rev-parse --verify "refs/tags/$TAG" >/dev/null 2>&1; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag --annotate "$TAG" --message "AEP Java $TAG" "$GITHUB_SHA"
+          git push origin "$TAG"
+
+      - name: Publish GitHub release
+        run: >-
+          gh release create "${{ steps.release.outputs.tag }}"
+          .conformance/reports/agent.json#aep-java-agent-conformance.json
+          .conformance/reports/service.json#aep-java-service-conformance.json
+          .conformance/reports/platform.json#aep-java-platform-conformance.json
+          .interop/reports/aep-java-node-interoperability.json#aep-java-node-interoperability.json
+          --generate-notes
+          --title "AEP Java ${{ steps.release.outputs.tag }}"
+          --verify-tag
+        env:
+          GH_TOKEN: ${{ github.token }}
