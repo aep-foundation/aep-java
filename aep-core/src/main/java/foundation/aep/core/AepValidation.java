@@ -112,6 +112,7 @@ public final class AepValidation {
         optionalNonEmpty(value.personFirstName(), "$.person.first_name", issues);
         optionalNonEmpty(value.personLastName(), "$.person.last_name", issues);
         optionalNonEmpty(value.personUsername(), "$.person.username", issues);
+        value.additional().forEach((name, claimValue) -> jsonValue(claimValue, "$." + name, issues));
         return issues.values();
     }
 
@@ -168,6 +169,13 @@ public final class AepValidation {
         }
         requiredNonEmpty(value.grantType(), "$.grant_type", issues);
         strings(value.requestedScopes(), "$.requested_scopes", false, false, issues);
+        optionalNonEmpty(value.tokenFormat(), "$.token_format", issues);
+        if (Aep.GRANT_TYPE_OAUTH_BEARER.equals(value.grantType())
+                && value.tokenFormat() != null
+                && !"opaque".equals(value.tokenFormat())
+                && !"jwt".equals(value.tokenFormat())) {
+            issues.add("$.token_format", "Expected opaque or jwt.");
+        }
         return issues.values();
     }
 
@@ -461,6 +469,11 @@ public final class AepValidation {
         strings(value.scopes(), "$.scopes", false, false, issues);
         if (value instanceof GrantResponses.OAuthBearer bearer) {
             requiredNonEmpty(bearer.accessToken(), "$.access_token", issues);
+            if (bearer.tokenFormat() != null
+                    && !"opaque".equals(bearer.tokenFormat())
+                    && !"jwt".equals(bearer.tokenFormat())) {
+                issues.add("$.token_format", "Expected opaque or jwt.");
+            }
             if (!"Bearer".equals(bearer.tokenType())) {
                 issues.add("$.token_type", "Expected Bearer.");
             }
@@ -575,10 +588,50 @@ public final class AepValidation {
             if (!value.grantTypes().contains(entry.getKey())) {
                 issues.add(path, "Expected configuration for an advertised grant type.");
             }
-            String supported =
-                    entry.getValue() == null ? null : entry.getValue().supportsPerCredentialRevoke();
+            if (entry.getValue() == null) {
+                issues.add(path, "Expected an object.");
+                continue;
+            }
+            String supported = entry.getValue().supportsPerCredentialRevoke();
             if (supported != null && !TRUE.equals(supported) && !"false".equals(supported)) {
                 issues.add(path + ".supports_per_credential_revoke", "Expected false or true.");
+            }
+            InspectDocument.GrantTypeConfig config = entry.getValue();
+            if (config.defaultLifetimeSeconds() != null) {
+                positiveIntegerString(config.defaultLifetimeSeconds(), path + ".default_lifetime_seconds", issues);
+            }
+            strings(config.scopesSupported(), path + ".scopes_supported", false, true, issues);
+            if (Aep.GRANT_TYPE_API_KEY.equals(entry.getKey())) {
+                strings(config.headerNames(), path + ".header_names", false, true, issues);
+                for (int index = 0;
+                        config.headerNames() != null
+                                && index < config.headerNames().size();
+                        index++) {
+                    String header = config.headerNames().get(index);
+                    if (header != null && !HTTP_FIELD_NAME.matcher(header).matches()) {
+                        issues.add(path + ".header_names[" + index + "]", "Expected an HTTP field name.");
+                    }
+                    for (int prior = 0; prior < index; prior++) {
+                        if (header != null
+                                && header.equalsIgnoreCase(config.headerNames().get(prior))) {
+                            issues.add(path + ".header_names[" + index + "]", "Expected unique field names.");
+                        }
+                    }
+                }
+            }
+            if (Aep.GRANT_TYPE_OAUTH_BEARER.equals(entry.getKey())) {
+                strings(config.accessTokenFormats(), path + ".access_token_formats", false, true, issues);
+                for (int index = 0;
+                        config.accessTokenFormats() != null
+                                && index < config.accessTokenFormats().size();
+                        index++) {
+                    String format = config.accessTokenFormats().get(index);
+                    if (!"opaque".equals(format) && !"jwt".equals(format)) {
+                        issues.add(path + ".access_token_formats[" + index + "]", "Expected opaque or jwt.");
+                    }
+                }
+                optionalHttps(config.introspectionEndpoint(), path + ".introspection_endpoint", issues);
+                optionalHttps(config.revocationEndpoint(), path + ".revocation_endpoint", issues);
             }
         }
     }
@@ -713,10 +766,31 @@ public final class AepValidation {
         if (value != null) requiredEndpoint(value, path, issues);
     }
 
+    private static void optionalHttps(String value, String path, Issues issues) {
+        if (value != null && !isAbsoluteHttpsUri(value)) {
+            issues.add(path, "Expected an absolute HTTPS URI.");
+        }
+    }
+
     private static void positiveIntegerString(String value, int maximum, String path, Issues issues) {
         int number = nonNegativeInteger(value);
         if (number < 1 || number > maximum || !Integer.toString(number).equals(value)) {
             issues.add(path, "Expected a decimal integer string from 1 through " + maximum + ".");
+        }
+    }
+
+    private static void positiveIntegerString(String value, String path, Issues issues) {
+        if (value == null) {
+            issues.add(path, "Expected a positive decimal integer string.");
+            return;
+        }
+        try {
+            java.math.BigInteger number = new java.math.BigInteger(value);
+            if (number.signum() < 1 || !number.toString().equals(value)) {
+                issues.add(path, "Expected a positive decimal integer string.");
+            }
+        } catch (NumberFormatException exception) {
+            issues.add(path, "Expected a positive decimal integer string.");
         }
     }
 
@@ -744,6 +818,33 @@ public final class AepValidation {
         } else if (resource != null) {
             issues.add(path, "resource is only valid for authenticate.");
         }
+    }
+
+    private static void jsonValue(Object value, String path, Issues issues) {
+        if (value == null || value instanceof String || value instanceof Boolean) return;
+        if (value instanceof Double doubleValue && !Double.isFinite(doubleValue)
+                || value instanceof Float floatValue && !Float.isFinite(floatValue)) {
+            issues.add(path, "Expected a finite JSON number.");
+            return;
+        }
+        if (value instanceof Number) return;
+        if (value instanceof List<?> list) {
+            for (int index = 0; index < list.size(); index++) {
+                jsonValue(list.get(index), path + "[" + index + "]", issues);
+            }
+            return;
+        }
+        if (value instanceof Map<?, ?> map) {
+            map.forEach((name, member) -> {
+                if (name instanceof String stringName) {
+                    jsonValue(member, path + "." + stringName, issues);
+                } else {
+                    issues.add(path, "Expected JSON object member names to be strings.");
+                }
+            });
+            return;
+        }
+        issues.add(path, "Expected a JSON value.");
     }
 
     private static boolean isEndpointPath(String value) {

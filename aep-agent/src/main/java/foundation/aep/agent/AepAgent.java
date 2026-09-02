@@ -67,7 +67,8 @@ public final class AepAgent {
         private AgentInspectCache configuredInspectCache = AgentInspectCache.inMemory();
         private AgentIdempotencyKeyProvider configuredIdempotencyKeyProvider =
                 (serviceDid, command, discriminator) -> UUID.randomUUID().toString();
-        private final List<AgentCredentialHandler> configuredCredentialHandlers = new ArrayList<>();
+        private final List<AgentCredentialHandler> configuredCredentialHandlers =
+                new ArrayList<>(AgentCredentialHandlers.builtIn());
         private Clock configuredClock = Clock.systemUTC();
         private Supplier<String> configuredJwtIdSupplier =
                 () -> UUID.randomUUID().toString();

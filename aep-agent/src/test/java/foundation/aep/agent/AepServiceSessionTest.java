@@ -10,6 +10,7 @@ import foundation.aep.core.AepHttpTransport;
 import foundation.aep.core.AgentStatus;
 import foundation.aep.core.ClaimValues;
 import foundation.aep.core.ClientAssertionClaims;
+import foundation.aep.core.GrantRequest;
 import foundation.aep.core.RevokeRequest;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -175,11 +176,14 @@ class AepServiceSessionTest {
                 .build()
                 .service(ORIGIN);
 
-        AgentGrantResult result = session.grant("custom-grant", List.of("read")).join();
+        AgentGrantResult result = session.grant(new GrantRequest("custom-grant", "production", List.of("read"), null))
+                .join();
 
         assertEquals("credential-1", result.credential().orElseThrow().credentialId());
         assertEquals("credential-1", store.credential.orElseThrow().credentialId());
         assertEquals(2, command.requests.size());
+        assertTrue(new String(command.requests.get(1).body(), StandardCharsets.UTF_8)
+                .contains("\"label\":\"production\""));
     }
 
     @Test

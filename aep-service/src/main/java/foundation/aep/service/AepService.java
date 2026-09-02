@@ -59,6 +59,7 @@ public final class AepService {
     private final boolean allowInsecureLoopback;
     private final Supplier<String> identifierSupplier;
     private final URI inspectUri;
+    private final ClaimValueLimits claimValueLimits;
 
     private AepService(Builder builder) {
         document = AepValidation.requireInspectDocument(builder.configuredDocument);
@@ -76,6 +77,7 @@ public final class AepService {
         allowInsecureLoopback = builder.configuredAllowInsecureLoopback;
         identifierSupplier = builder.configuredIdentifierSupplier;
         inspectUri = builder.configuredInspectUri;
+        claimValueLimits = builder.configuredClaimValueLimits;
         requireConfiguration();
     }
 
@@ -98,6 +100,9 @@ public final class AepService {
                             && !request.idempotencyKey().equals(options.idempotencyKey()))
                     || !AepValidation.enrollRequest(request).isEmpty()) {
                 return completed(problem(ERROR_INVALID_REQUEST, TITLE_INVALID_REQUEST, 400));
+            }
+            if (!claimValueLimits.accepts(request.claims())) {
+                return completed(problem("requirements_unmet", "Requirements unmet", 422));
             }
             return idempotent(claims.subject(), "enroll", options.idempotencyKey(), request, () -> enrollNew(request));
         });
@@ -152,26 +157,45 @@ public final class AepService {
         if (!presentation.valid()) {
             return completed(ProtectedResourceResult.rejected(resourceProblem(ERROR_NOT_RECOGNIZED, resource)));
         }
+        CredentialAuthenticationInput input =
+                new CredentialAuthenticationInput(request.headers(), request.method(), resource, clock.instant());
         if (presentation.authorization() != null && presentation.authorization().scheme() == AuthorizationScheme.AEP) {
             if (!authenticationMethods().contains(Aep.AUTHENTICATION_METHOD_JWT)) {
                 return completed(ProtectedResourceResult.rejected(
                         resourceProblem("unsupported_authentication_method", resource)));
             }
-            CommandOptions options =
-                    CommandOptions.authenticated(presentation.authorization().credentials());
-            return authenticateAssertion(options, AssertionOperation.AUTHENTICATE, resource.toString())
-                    .thenCompose(
-                            authentication -> activePrincipal(authentication, Aep.AUTHENTICATION_METHOD_JWT, resource));
+            return presentedCredentialMethods(authenticationMethods(), input, 0, List.of())
+                    .thenCompose(methods -> {
+                        if (!methods.isEmpty()) {
+                            return completed(
+                                    ProtectedResourceResult.rejected(resourceProblem(ERROR_NOT_RECOGNIZED, resource)));
+                        }
+                        CommandOptions options = CommandOptions.authenticated(
+                                presentation.authorization().credentials());
+                        return authenticateAssertion(options, AssertionOperation.AUTHENTICATE, resource.toString())
+                                .thenCompose(authentication ->
+                                        activePrincipal(authentication, Aep.AUTHENTICATION_METHOD_JWT, resource));
+                    });
         }
         String presentedMethod = authenticationMethod(presentation.authorization());
         if (presentedMethod != null && !authenticationMethods().contains(presentedMethod)) {
             return completed(
                     ProtectedResourceResult.rejected(resourceProblem("unsupported_authentication_method", resource)));
         }
-        CredentialAuthenticationInput input =
-                new CredentialAuthenticationInput(request.headers(), request.method(), resource, clock.instant());
-        return authenticateCredential(
-                new ArrayList<>(authenticationMethods()), 0, input, presentation.authorization() != null, resource);
+        return presentedCredentialMethods(authenticationMethods(), input, 0, List.of())
+                .thenCompose(methods -> {
+                    if (methods.size() > 1
+                            || presentedMethod != null
+                                    && (methods.size() != 1 || !presentedMethod.equals(methods.get(0)))) {
+                        return completed(
+                                ProtectedResourceResult.rejected(resourceProblem(ERROR_NOT_RECOGNIZED, resource)));
+                    }
+                    if (methods.isEmpty()) {
+                        return completed(
+                                ProtectedResourceResult.rejected(resourceProblem("authentication_required", resource)));
+                    }
+                    return authenticateCredential(methods, 0, input, true, resource);
+                });
     }
 
     private CompletionStage<ServiceResponse<EnrollResponse>> enrollNew(EnrollRequest request) {
@@ -375,6 +399,23 @@ public final class AepService {
         });
     }
 
+    private CompletionStage<List<String>> presentedCredentialMethods(
+            List<String> methods, CredentialAuthenticationInput input, int index, List<String> presented) {
+        if (index == methods.size()) return completed(presented);
+        String method = methods.get(index);
+        if (Aep.AUTHENTICATION_METHOD_JWT.equals(method)) {
+            return presentedCredentialMethods(methods, input, index + 1, presented);
+        }
+        return authenticators.get(method).hasPresentation(input).thenCompose(found -> {
+            List<String> selected = presented;
+            if (found) {
+                selected = new ArrayList<>(presented);
+                selected.add(method);
+            }
+            return presentedCredentialMethods(methods, input, index + 1, List.copyOf(selected));
+        });
+    }
+
     private <T> CompletionStage<ServiceResponse<T>> idempotent(
             String agentDid,
             String command,
@@ -458,7 +499,9 @@ public final class AepService {
         if (request instanceof GrantRequest grant) {
             Map<String, Object> value = new java.util.TreeMap<>();
             value.put("grant_type", grant.grantType());
+            if (grant.label() != null) value.put("label", grant.label());
             if (!grant.requestedScopes().isEmpty()) value.put("requested_scopes", grant.requestedScopes());
+            if (grant.tokenFormat() != null) value.put("token_format", grant.tokenFormat());
             return value;
         }
         if (request instanceof RevokeRequest revoke) {
@@ -693,6 +736,7 @@ public final class AepService {
         private Supplier<String> configuredIdentifierSupplier =
                 () -> UUID.randomUUID().toString();
         private URI configuredInspectUri;
+        private ClaimValueLimits configuredClaimValueLimits = ClaimValueLimits.defaults();
 
         private Builder(InspectDocument document, ClientAssertionVerifier verifier) {
             configuredDocument = document;
@@ -733,6 +777,19 @@ public final class AepService {
             return this;
         }
 
+        public Builder storedCredentialGrantType(StoredCredentialGrantType value) {
+            Objects.requireNonNull(value, "storedCredentialGrantType");
+            InspectDocument.Commands commands = configuredDocument.commands();
+            InspectDocument.GrantTypeConfig advertised =
+                    commands == null ? null : commands.grantTypesConfig().get(value.grantType());
+            if (!Objects.equals(advertised, value.config())) {
+                throw new IllegalArgumentException("Stored credential configuration must match the Inspect document.");
+            }
+            grantType(value.definition());
+            credentialAuthenticator(value.grantType(), value.authenticator());
+            return this;
+        }
+
         public Builder clock(Clock value) {
             configuredClock = Objects.requireNonNull(value);
             return this;
@@ -755,6 +812,11 @@ public final class AepService {
 
         public Builder inspectUri(URI value) {
             configuredInspectUri = value;
+            return this;
+        }
+
+        public Builder claimValueLimits(ClaimValueLimits value) {
+            configuredClaimValueLimits = Objects.requireNonNull(value, "claimValueLimits");
             return this;
         }
 

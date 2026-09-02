@@ -40,7 +40,7 @@ final class AepProtocolValidationTest {
 
     @Test
     void validatesGrantAndRevokeMessages() {
-        GrantRequest grantRequest = new GrantRequest("api-key", List.of("read"));
+        GrantRequest grantRequest = new GrantRequest("oauth-bearer", "production", List.of("read"), "opaque");
 
         assertTrue(AepValidation.grantRequest(grantRequest).isEmpty());
         assertTrue(AepValidation.revokeRequest(RevokeRequest.forAllGrantTypes()).isEmpty());
@@ -50,10 +50,39 @@ final class AepProtocolValidationTest {
                 .isEmpty());
         assertFalse(AepValidation.grantRequest(new GrantRequest("", List.of("read")))
                 .isEmpty());
+        assertFalse(AepValidation.grantRequest(new GrantRequest("oauth-bearer", null, List.of(), "invalid"))
+                .isEmpty());
         assertFalse(AepValidation.revokeRequest(new RevokeRequest(null, "credential-1", null))
                 .isEmpty());
         assertFalse(AepValidation.revokeRequest(new RevokeRequest("api-key", null, "true"))
                 .isEmpty());
+    }
+
+    @Test
+    void validatesBuiltInGrantConfigurationAndProfileFields() {
+        InspectDocument.GrantTypeConfig config = new InspectDocument.GrantTypeConfig(
+                List.of(), "600", List.of("x-service-key"), null, List.of("read"), "true", null, null);
+
+        assertEquals("600", config.defaultLifetimeSeconds());
+        assertEquals(List.of("x-service-key"), config.headerNames());
+        assertEquals(List.of("read"), config.scopesSupported());
+        assertEquals("true", config.supportsPerCredentialRevoke());
+
+        GrantRequest request = new GrantRequest("oauth-bearer", "prod", List.of(), "jwt");
+        GrantResponses.OAuthBearer response = new GrantResponses.OAuthBearer(
+                "secret", "credential-1", "2027-01-01T00:00:00Z", List.of(), "jwt", "Bearer");
+        assertEquals("prod", request.label());
+        assertEquals("jwt", request.tokenFormat());
+        assertEquals("jwt", response.tokenFormat());
+    }
+
+    @Test
+    void rejectsNonJsonAdditionalClaimValues() {
+        ClaimValues values = ClaimValues.builder()
+                .additional("example.invalid", URI.create("https://example.com"))
+                .build();
+
+        assertFalse(AepValidation.claimValues(values).isEmpty());
     }
 
     @Test

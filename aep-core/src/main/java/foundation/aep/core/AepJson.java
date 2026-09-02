@@ -101,7 +101,7 @@ public final class AepJson {
     public static GrantRequest parseGrantRequest(String json) {
         Map<String, Object> value = object(json, GRANT_REQUEST);
         AepRawJson.requireMembers(value, GRANT_REQUEST, "grant_type");
-        AepRawJson.rejectNullPaths(value, GRANT_REQUEST, "grant_type", "requested_scopes");
+        AepRawJson.rejectNullPaths(value, GRANT_REQUEST, "grant_type", "label", "requested_scopes", "token_format");
         return parse(json, GrantRequest.class, GRANT_REQUEST, AepValidation::grantRequest);
     }
 
@@ -314,7 +314,8 @@ public final class AepJson {
     public static GrantResponses.OAuthBearer parseOAuthBearerGrantResponse(String json) {
         Map<String, Object> value = object(json, OAUTH_RESPONSE);
         AepRawJson.requireMembers(value, OAUTH_RESPONSE, "access_token", CREDENTIAL_ID, EXPIRES_AT, "token_type");
-        AepRawJson.rejectNullPaths(value, OAUTH_RESPONSE, "access_token", CREDENTIAL_ID, EXPIRES_AT, "token_type");
+        AepRawJson.rejectNullPaths(
+                value, OAUTH_RESPONSE, "access_token", CREDENTIAL_ID, EXPIRES_AT, "token_format", "token_type");
         return parse(json, GrantResponses.OAuthBearer.class, OAUTH_RESPONSE, AepValidation::grantResponse);
     }
 
@@ -370,6 +371,10 @@ public final class AepJson {
 
     public static void requireObject(String json, String documentType) {
         object(json, documentType);
+    }
+
+    public static Map<String, Object> parseObject(String json, String documentType) {
+        return Copies.jsonMap(object(json, documentType));
     }
 
     private static Object canonicalValue(Object value) {
