@@ -89,6 +89,26 @@ framework adapter does not choose a JSON provider for the application.
 with Spring and delegates AEP serialization to the selected `AepJson` provider, keeping the
 framework generation and Jackson generation as explicit application choices.
 
+## Start with the examples
+
+The [`examples`](./examples/README.md) module contains two programs that run as part of the Maven
+reactor:
+
+- an Agent and a JDK HTTP Service that complete Inspect, Enroll, API-key Grant, protected-resource
+  authentication, and Revoke operations with required claim values;
+- an ephemeral Platform that provisions a Service-scoped Agent identity and signs a client
+  assertion with application-owned key custody.
+
+Run both programs from a clean checkout:
+
+```sh
+./mvnw -pl examples -am verify
+```
+
+The examples use process-local state and loopback HTTP so the complete flow is runnable without
+external infrastructure. Follow the role-module guides before replacing those development
+boundaries in a production application.
+
 ## Development
 
 The Maven Wrapper provides the complete repository gate:
