@@ -1,6 +1,7 @@
 # Agent Enrollment Protocol for Java
 
 [![CI](https://github.com/aep-foundation/aep-java/actions/workflows/ci.yml/badge.svg)](https://github.com/aep-foundation/aep-java/actions/workflows/ci.yml)
+[![Maven Central](https://img.shields.io/maven-central/v/foundation.aep/aep-agent)](https://central.sonatype.com/namespace/foundation.aep)
 [![Java](https://img.shields.io/badge/Java-17%2B-ED8B00?logo=openjdk&logoColor=white)](https://openjdk.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
