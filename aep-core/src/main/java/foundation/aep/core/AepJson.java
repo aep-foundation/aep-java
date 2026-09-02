@@ -193,6 +193,10 @@ public final class AepJson {
         return PROVIDER.write(canonicalValue(value));
     }
 
+    public static void requireObject(String json, String documentType) {
+        object(json, documentType);
+    }
+
     private static Object canonicalValue(Object value) {
         if (value instanceof EnrollResponse response) {
             return new EnrollResponse(

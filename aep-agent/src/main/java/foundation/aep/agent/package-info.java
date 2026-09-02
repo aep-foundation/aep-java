@@ -1,2 +1,2 @@
-/** Agent-side enrollment and authenticated-resource integration. */
+/** Agent-side AEP inspection, enrollment, credential, and authentication APIs. */
 package foundation.aep.agent;
