@@ -41,7 +41,21 @@ The default stores are process-local and intended for development. Production Se
 provide durable `EnrollmentStore` and `IdempotencyStore` implementations and a replay store whose
 consume operation is atomic across every Service instance.
 
-## Dispatch commands
+## Expose HTTP commands
+
+`AepServiceHttpHandler` provides the shared HTTP boundary used by the JDK HTTP server, Servlet, and
+Spring Web MVC adapters. It derives the advertised routes, enforces methods, media types, UTF-8,
+the request-byte limit, AEP authentication, and idempotency headers, and serializes AEP responses
+and Problem Details consistently.
+
+```java
+AepServiceHttpHandler handler = new AepServiceHttpHandler(service);
+```
+
+Use the constructor accepting `maximumRequestBytes` to replace the 65,536-byte default. The server
+or proxy should enforce its own request limits before buffering request bodies as a second layer.
+
+## Dispatch commands directly
 
 Framework adapters parse the HTTP body into `aep-core` contracts and pass the client assertion and
 idempotency key separately:
@@ -55,8 +69,8 @@ ServiceResponse<EnrollResponse> response = service.enroll(
 ```
 
 `ServiceResponse` contains the HTTP status, media type, response body or Problem Details, and
-response headers. The HTTP adapter module maps that framework-neutral result onto a server
-framework.
+response headers. Applications with an unsupported server framework can map that result directly
+or adapt `AepServiceHttpHandler`.
 
 ## Add a credential profile
 

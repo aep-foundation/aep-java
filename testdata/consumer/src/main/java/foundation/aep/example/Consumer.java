@@ -4,6 +4,9 @@ import foundation.aep.agent.AepAgent;
 import foundation.aep.agent.AgentIdentity;
 import foundation.aep.core.AepJson;
 import foundation.aep.core.RevokeResponse;
+import foundation.aep.httpserver.AepHttpServer;
+import foundation.aep.servlet.AepServlet;
+import foundation.aep.spring.webmvc.AepSpringWebMvc;
 import java.net.URI;
 import java.util.concurrent.CompletableFuture;
 
@@ -16,6 +19,9 @@ public final class Consumer {
             throw new IllegalStateException("Unexpected Revoke response JSON: " + json);
         }
         AepJson.parseRevokeResponse(json);
+        requirePublicType(AepHttpServer.class);
+        requirePublicType(AepServlet.class);
+        requirePublicType(AepSpringWebMvc.class);
 
         AepAgent agent = AepAgent.builder()
                 .inspectTransport(request -> CompletableFuture.failedFuture(new UnsupportedOperationException()))
@@ -28,6 +34,12 @@ public final class Consumer {
         URI origin = URI.create("https://service.example");
         if (!origin.equals(agent.service(origin).origin())) {
             throw new IllegalStateException("Unexpected Agent Service origin.");
+        }
+    }
+
+    private static void requirePublicType(Class<?> type) {
+        if (!type.getName().startsWith("foundation.aep.")) {
+            throw new IllegalStateException("Unexpected AEP public type.");
         }
     }
 }

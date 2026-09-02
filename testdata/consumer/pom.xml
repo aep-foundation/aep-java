@@ -12,6 +12,8 @@
     <aep.version>0.1.0-SNAPSHOT</aep.version>
     <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <servlet.version>6.0.0</servlet.version>
+    <spring.version>6.2.19</spring.version>
   </properties>
 
   <dependencyManagement>
@@ -38,6 +40,28 @@
     <dependency>
       <groupId>foundation.aep</groupId>
       <artifactId>aep-platform</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>foundation.aep</groupId>
+      <artifactId>aep-httpserver</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>foundation.aep</groupId>
+      <artifactId>aep-servlet</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>foundation.aep</groupId>
+      <artifactId>aep-spring-webmvc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>jakarta.servlet</groupId>
+      <artifactId>jakarta.servlet-api</artifactId>
+      <version>${servlet.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-webmvc</artifactId>
+      <version>${spring.version}</version>
     </dependency>
   </dependencies>
 
@@ -70,7 +94,7 @@
 
   <profiles>
     <profile>
-      <id>jackson2</id>
+      <id>spring6</id>
       <activation>
         <activeByDefault>true</activeByDefault>
       </activation>
@@ -82,7 +106,11 @@
       </dependencies>
     </profile>
     <profile>
-      <id>jackson3</id>
+      <id>spring7</id>
+      <properties>
+        <servlet.version>6.1.0</servlet.version>
+        <spring.version>7.0.9</spring.version>
+      </properties>
       <dependencies>
         <dependency>
           <groupId>foundation.aep</groupId>
