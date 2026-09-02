@@ -33,3 +33,7 @@ jobs:
       - name: Verify clean BOM consumers
         if: matrix.java == '17'
         run: ./scripts/verify-consumer.sh
+
+      - name: Verify Spring Framework 7 compatibility
+        if: matrix.java == '17'
+        run: ./mvnw --batch-mode --no-transfer-progress -pl aep-spring-webmvc -am -Pspring7 verify

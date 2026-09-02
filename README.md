@@ -10,13 +10,16 @@ Service-issued credentials, and authenticated Agent access.
 
 ## Modules
 
-| Goal                                               | Module                                             |
-| -------------------------------------------------- | -------------------------------------------------- |
-| Align compatible AEP dependency versions          | [`aep-bom`](./aep-bom/README.md)                   |
-| Use protocol contracts and validation directly    | [`aep-core`](./aep-core/README.md)                 |
-| Inspect, enroll with, and authenticate to Services | [`aep-agent`](./aep-agent/README.md)               |
-| Integrate enrollment into a Service                | [`aep-service`](./aep-service/README.md)           |
-| Host managed Agent identities                      | [`aep-platform`](./aep-platform/README.md)         |
+| Goal                                               | Module                                               |
+| -------------------------------------------------- | ---------------------------------------------------- |
+| Align compatible AEP dependency versions          | [`aep-bom`](./aep-bom/README.md)                     |
+| Use protocol contracts and validation directly    | [`aep-core`](./aep-core/README.md)                   |
+| Inspect, enroll with, and authenticate to Services | [`aep-agent`](./aep-agent/README.md)                 |
+| Integrate enrollment into a Service                | [`aep-service`](./aep-service/README.md)             |
+| Expose a Service with the JDK HTTP server          | [`aep-httpserver`](./aep-httpserver/README.md)       |
+| Expose a Service with Jakarta Servlet              | [`aep-servlet`](./aep-servlet/README.md)             |
+| Expose a Service with Spring Web MVC               | [`aep-spring-webmvc`](./aep-spring-webmvc/README.md) |
+| Host managed Agent identities                      | [`aep-platform`](./aep-platform/README.md)           |
 | Integrate with Jackson 2                           | [`aep-json-jackson2`](./aep-json-jackson2/README.md) |
 | Integrate with Jackson 3                           | [`aep-json-jackson3`](./aep-json-jackson3/README.md) |
 
@@ -73,8 +76,18 @@ on each AEP dependency directly:
 </dependency>
 ```
 
-Use the Jackson provider matching the application's Jackson major version. Applications should
-select one provider rather than introducing both Jackson majors.
+The BOM aligns AEP module versions; it does not add dependencies to an application. Select exactly
+one JSON provider explicitly:
+
+- `aep-json-jackson2` for an application using Jackson 2
+- `aep-json-jackson3` for an application using Jackson 3
+
+`AepJson` fails during initialization when it finds zero providers or more than one provider. The
+framework adapter does not choose a JSON provider for the application.
+
+`aep-spring-webmvc` supports Spring Framework 6 and 7 from one artifact. It exchanges raw bytes
+with Spring and delegates AEP serialization to the selected `AepJson` provider, keeping the
+framework generation and Jackson generation as explicit application choices.
 
 ## Development
 

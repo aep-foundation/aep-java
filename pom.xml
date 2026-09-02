@@ -44,6 +44,9 @@
     <module>aep-json-jackson3</module>
     <module>aep-agent</module>
     <module>aep-service</module>
+    <module>aep-httpserver</module>
+    <module>aep-servlet</module>
+    <module>aep-spring-webmvc</module>
     <module>aep-platform</module>
     <module>examples</module>
     <module>tools/aep-conformance</module>
@@ -55,9 +58,15 @@
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
     <junit.version>6.1.3</junit.version>
+    <hamcrest.version>3.0</hamcrest.version>
     <jackson2.version>2.18.3</jackson2.version>
     <jackson3.version>3.2.2</jackson3.version>
     <jackson-annotations.version>2.22</jackson-annotations.version>
+    <jakarta-servlet.version>6.0.0</jakarta-servlet.version>
+    <jakarta-servlet7.version>6.1.0</jakarta-servlet7.version>
+    <spring6.version>6.2.19</spring6.version>
+    <spring7.version>7.0.9</spring7.version>
+    <spring.version>${spring6.version}</spring.version>
     <nimbus-jose-jwt.version>10.9.1</nimbus-jose-jwt.version>
     <tink.version>1.16.0</tink.version>
     <jacoco.version>0.8.15</jacoco.version>

@@ -32,7 +32,7 @@ if [ "${AEP_CONSUMER_SOURCE:-local}" = "local" ]; then
 
   install_artifact "$root/pom.xml" "$root/pom.xml"
   install_artifact "$root/aep-bom/pom.xml" "$root/aep-bom/pom.xml"
-  for artifact in aep-core aep-json-jackson2 aep-json-jackson3 aep-agent aep-service aep-platform; do
+  for artifact in aep-core aep-json-jackson2 aep-json-jackson3 aep-agent aep-service aep-httpserver aep-servlet aep-spring-webmvc aep-platform; do
     install_artifact \
       "$root/$artifact/target/$artifact-$version.jar" \
       "$root/$artifact/pom.xml"
@@ -49,4 +49,4 @@ verify_consumer() {
 }
 
 verify_consumer
-verify_consumer -Pjackson3
+verify_consumer -Pspring7
