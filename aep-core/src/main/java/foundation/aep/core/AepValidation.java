@@ -26,6 +26,12 @@ public final class AepValidation {
     private static final Pattern ATEXT = Pattern.compile("[A-Za-z0-9!#$%&'*+\\-/=?^_`{|}~]+");
     private static final Set<String> AUTHENTICATED_COMMANDS = Set.of("enroll", "grant", "revoke", "status");
     private static final String COMMANDS_SUPPORTED_PATH = "$.commands.supported";
+    private static final String AGENT_DID_PATH = "$.agent_did";
+    private static final String OPERATION_PATH = "$.op";
+    private static final String OPERATION_REQUIRED = "Expected a registered assertion operation.";
+    private static final String RESOURCE_PATH = "$.resource";
+    private static final String SERVICE_DID_PATH = "$.service_did";
+    private static final String STATUS_PATH = "$.status";
     private static final String JSON_OBJECT = "object";
     private static final String HTTPS = "https";
     private static final String TRUE = "true";
@@ -118,7 +124,7 @@ public final class AepValidation {
         if (value == null) {
             return issues.required("$", JSON_OBJECT).values();
         }
-        requiredNonEmpty(value.agentDid(), "$.agent_did", issues);
+        requiredNonEmpty(value.agentDid(), AGENT_DID_PATH, issues);
         if (value.claims() != null) {
             issues.prefix("$.claims", claimValues(value.claims()));
         }
@@ -132,7 +138,7 @@ public final class AepValidation {
             return issues.required("$", JSON_OBJECT).values();
         }
         if (value.status() == null) {
-            issues.add("$.status", "Expected a registered Agent status.");
+            issues.add(STATUS_PATH, "Expected a registered Agent status.");
         }
         lifecycleMetadata(
                 value.ownerActionRequired(), value.verificationPending(), value.requirementsPending(), issues);
@@ -145,7 +151,7 @@ public final class AepValidation {
             return issues.required("$", JSON_OBJECT).values();
         }
         if (value.status() == null) {
-            issues.add("$.status", "Expected a registered Agent status.");
+            issues.add(STATUS_PATH, "Expected a registered Agent status.");
         }
         lifecycleMetadata(
                 value.ownerActionRequired(), value.verificationPending(), value.requirementsPending(), issues);
@@ -204,7 +210,7 @@ public final class AepValidation {
         requiredNonEmpty(value.audience(), "$.aud", issues);
         requiredNonEmpty(value.jwtId(), "$.jti", issues);
         if (value.operation() == null) {
-            issues.add("$.op", "Expected a registered assertion operation.");
+            issues.add(OPERATION_PATH, OPERATION_REQUIRED);
         }
         if (nonEmpty(value.issuer())
                 && nonEmpty(value.subject())
@@ -219,10 +225,10 @@ public final class AepValidation {
         }
         if (value.operation() == AssertionOperation.AUTHENTICATE) {
             if (!isProtectedResourceUri(value.resource(), allowInsecureLoopback)) {
-                issues.add("$.resource", "Expected an absolute HTTPS URI without a fragment.");
+                issues.add(RESOURCE_PATH, "Expected an absolute HTTPS URI without a fragment.");
             }
         } else if (value.resource() != null) {
-            issues.add("$.resource", "resource is only valid for authenticate.");
+            issues.add(RESOURCE_PATH, "resource is only valid for authenticate.");
         }
         return issues.values();
     }
@@ -262,6 +268,183 @@ public final class AepValidation {
                         || value.requirementsPending() != null
                         || value.verificationPending() != null)) {
             issues.add("$", "not_recognized must not expose pending or owner-action metadata.");
+        }
+        return issues.values();
+    }
+
+    public static List<ValidationIssue> platformDiscoveryDocument(PlatformDiscoveryDocument value) {
+        Issues issues = new Issues();
+        if (value == null) return issues.required("$", JSON_OBJECT).values();
+        if (!isCompatibleVersion(value.version())) {
+            issues.add("$.aep_version", "Expected a supported AEP major.minor version.");
+        }
+        PlatformDiscoveryDocument.Endpoints endpoints = value.endpoints();
+        if (endpoints == null) {
+            issues.required("$.endpoints", JSON_OBJECT);
+        } else {
+            optionalEndpoint(endpoints.hostedVerification(), "$.endpoints.hosted_verification", issues);
+            requiredEndpointTemplate(endpoints.lifecycle(), "{agent_identity_id}", "$.endpoints.lifecycle", issues);
+            requiredEndpoint(endpoints.list(), "$.endpoints.list", issues);
+            requiredEndpoint(endpoints.provision(), "$.endpoints.provision", issues);
+            requiredEndpointTemplate(endpoints.sign(), "{agent_identity_id}", "$.endpoints.sign", issues);
+        }
+        if (value.http() == null) {
+            issues.required("$.http", JSON_OBJECT);
+        } else {
+            requiredEndpoint(value.http().endpointBase(), "$.http.endpoint_base", issues);
+        }
+        PlatformDiscoveryDocument.Identity identity = value.identity();
+        if (identity == null) {
+            issues.required("$.identity", JSON_OBJECT);
+        } else {
+            strings(identity.didMethods(), "$.identity.did_methods", true, true, issues);
+            if (identity.didUrlTemplate() == null
+                    || !identity.didUrlTemplate().contains("{agent_did_id}")
+                    || !isAbsoluteHttpsUri(identity.didUrlTemplate().replace("{agent_did_id}", "validation"))) {
+                issues.add("$.identity.did_url_template", "Expected an absolute HTTPS URL template.");
+            }
+        }
+        PlatformDiscoveryDocument.Platform platform = value.platform();
+        if (platform == null) {
+            issues.required("$.platform", JSON_OBJECT);
+        } else {
+            if (platform.did() != null && !platform.did().startsWith("did:")) {
+                issues.add("$.platform.did", "Expected a DID string.");
+            }
+            requiredNonEmpty(platform.name(), "$.platform.name", issues);
+        }
+        PlatformDiscoveryDocument.Signing signing = value.signing();
+        if (signing == null) {
+            issues.required("$.signing", JSON_OBJECT);
+        } else {
+            signingAlgorithms(signing.algorithms(), "$.signing.algorithms", issues);
+            positiveIntegerString(signing.defaultLifetimeSeconds(), 300, "$.signing.default_lifetime_seconds", issues);
+        }
+        return issues.values();
+    }
+
+    public static PlatformDiscoveryDocument requirePlatformDiscoveryDocument(PlatformDiscoveryDocument value) {
+        return require("Platform discovery document", value, platformDiscoveryDocument(value));
+    }
+
+    public static List<ValidationIssue> platformAgentIdentity(PlatformAgentIdentity value) {
+        Issues issues = new Issues();
+        if (value == null) return issues.required("$", JSON_OBJECT).values();
+        requiredDid(value.agentDid(), AGENT_DID_PATH, issues);
+        requiredNonEmpty(value.agentIdentityId(), "$.agent_identity_id", issues);
+        requiredDateTime(value.createdAt(), "$.created_at", issues);
+        if (!isAbsoluteHttpsUri(value.didDocumentUrl())) {
+            issues.add("$.did_document_url", "Expected an absolute HTTPS URI.");
+        }
+        requiredNonEmpty(value.keyId(), "$.key_id", issues);
+        requiredDid(value.serviceDid(), SERVICE_DID_PATH, issues);
+        signingAlgorithms(value.signingAlgorithms(), "$.signing_algorithms", issues);
+        if (value.status() == null) issues.add(STATUS_PATH, "Expected a managed Agent status.");
+        requiredDateTime(value.updatedAt(), "$.updated_at", issues);
+        return issues.values();
+    }
+
+    public static PlatformAgentIdentity requirePlatformAgentIdentity(PlatformAgentIdentity value) {
+        return require("Platform Agent identity", value, platformAgentIdentity(value));
+    }
+
+    public static List<ValidationIssue> platformAgentIdentityListResponse(PlatformAgentIdentityListResponse value) {
+        Issues issues = new Issues();
+        if (value == null) return issues.required("$", JSON_OBJECT).values();
+        nonNegativeIntegerString(value.count(), "$.count", issues);
+        nonNegativeIntegerString(value.total(), "$.total", issues);
+        if (value.data() == null) {
+            issues.required("$.data", "array");
+        } else {
+            for (int index = 0; index < value.data().size(); index++) {
+                issues.prefix(
+                        "$.data[" + index + "]",
+                        platformAgentIdentity(value.data().get(index)));
+            }
+            if (nonNegativeInteger(value.count()) != value.data().size()) {
+                issues.add("$.count", "Expected count to equal the number of data entries.");
+            }
+        }
+        return issues.values();
+    }
+
+    public static List<ValidationIssue> platformProvisionRequest(PlatformProvisionRequest value) {
+        Issues issues = new Issues();
+        if (value == null) return issues.required("$", JSON_OBJECT).values();
+        requiredDid(value.serviceDid(), SERVICE_DID_PATH, issues);
+        return issues.values();
+    }
+
+    public static List<ValidationIssue> platformLifecycleRequest(PlatformLifecycleRequest value) {
+        Issues issues = new Issues();
+        if (value == null) return issues.required("$", JSON_OBJECT).values();
+        if (value.status() == null) issues.add(STATUS_PATH, "Expected a managed Agent status.");
+        return issues.values();
+    }
+
+    public static List<ValidationIssue> platformSignRequest(PlatformSignRequest value) {
+        Issues issues = new Issues();
+        if (value == null) return issues.required("$", JSON_OBJECT).values();
+        requiredNonEmpty(value.jwtId(), "$.jti", issues);
+        if (value.operation() == null) issues.add(OPERATION_PATH, OPERATION_REQUIRED);
+        requiredDid(value.serviceDid(), SERVICE_DID_PATH, issues);
+        if (value.lifetimeSeconds() != null) {
+            positiveIntegerString(value.lifetimeSeconds(), 300, "$.lifetime_seconds", issues);
+        }
+        operationResource(value.operation(), value.resource(), RESOURCE_PATH, issues);
+        return issues.values();
+    }
+
+    public static List<ValidationIssue> platformSignResponse(PlatformSignResponses.Response value) {
+        Issues issues = new Issues();
+        if (value == null) return issues.required("$", JSON_OBJECT).values();
+        if (value instanceof PlatformSignResponses.Completed completed) {
+            if (!"completed".equals(completed.status())) issues.add(STATUS_PATH, "Expected completed.");
+            requiredDid(completed.agentDid(), AGENT_DID_PATH, issues);
+            requiredNonEmpty(completed.clientAssertion(), "$.client_assertion", issues);
+            requiredDateTime(completed.expiresAt(), "$.expires_at", issues);
+            requiredDateTime(completed.issuedAt(), "$.issued_at", issues);
+            requiredNonEmpty(completed.jwtId(), "$.jti", issues);
+            requiredDid(completed.serviceDid(), SERVICE_DID_PATH, issues);
+        } else if (value instanceof PlatformSignResponses.Pending pending) {
+            if (!"pending".equals(pending.status())) issues.add(STATUS_PATH, "Expected pending.");
+            positiveIntegerString(pending.retryAfterSeconds(), 300, "$.retry_after_seconds", issues);
+        }
+        return issues.values();
+    }
+
+    public static PlatformSignResponses.Response requirePlatformSignResponse(PlatformSignResponses.Response value) {
+        return require("Platform sign response", value, platformSignResponse(value));
+    }
+
+    public static List<ValidationIssue> platformVerificationRequest(PlatformVerificationRequest value) {
+        Issues issues = new Issues();
+        if (value == null) return issues.required("$", JSON_OBJECT).values();
+        requiredNonEmpty(value.clientAssertion(), "$.client_assertion", issues);
+        if (value.operation() == null) issues.add(OPERATION_PATH, OPERATION_REQUIRED);
+        requiredDid(value.serviceDid(), SERVICE_DID_PATH, issues);
+        operationResource(value.operation(), value.resource(), RESOURCE_PATH, issues);
+        return issues.values();
+    }
+
+    public static List<ValidationIssue> platformVerificationResponse(PlatformVerificationResponse value) {
+        Issues issues = new Issues();
+        if (value == null) return issues.required("$", JSON_OBJECT).values();
+        requiredDid(value.serviceDid(), SERVICE_DID_PATH, issues);
+        if (value.verified()) {
+            requiredDid(value.agentDid(), AGENT_DID_PATH, issues);
+            requiredNonEmpty(value.agentIdentityId(), "$.agent_identity_id", issues);
+            if (value.operation() == null) issues.add(OPERATION_PATH, OPERATION_REQUIRED);
+            if (!"verified".equals(value.reason())) issues.add("$.reason", "Expected verified.");
+            if (value.status() == null) issues.add(STATUS_PATH, "Expected a managed Agent status.");
+        } else {
+            if (!"not_recognized".equals(value.reason())) issues.add("$.reason", "Expected not_recognized.");
+            if (value.agentDid() != null
+                    || value.agentIdentityId() != null
+                    || value.operation() != null
+                    || value.status() != null) {
+                issues.add("$", "An unrecognized response must not disclose identity details.");
+            }
         }
         return issues.values();
     }
@@ -498,6 +681,92 @@ public final class AepValidation {
             if (value == null || !pattern.matcher(value).matches()) {
                 issues.add(path + "[" + index + "]", "Expected a syntactically valid AEP identifier.");
             }
+        }
+    }
+
+    private static void signingAlgorithms(List<String> values, String path, Issues issues) {
+        strings(values, path, true, true, issues);
+        if (values != null && values.stream().anyMatch(value -> !Aep.REQUIRED_SIGNING_ALGORITHMS.contains(value))) {
+            issues.add(path, "Expected only registered AEP signing algorithms.");
+        }
+    }
+
+    private static void requiredDid(String value, String path, Issues issues) {
+        if (!nonEmpty(value) || !value.startsWith("did:")) issues.add(path, "Expected a DID string.");
+    }
+
+    private static void requiredDateTime(String value, String path, Issues issues) {
+        if (!isDateTime(value)) issues.add(path, "Expected an RFC 3339 date-time.");
+    }
+
+    private static void requiredEndpoint(String value, String path, Issues issues) {
+        if (!isEndpointPath(value)) issues.add(path, "Expected an absolute path without a query or fragment.");
+    }
+
+    private static void requiredEndpointTemplate(String value, String variable, String path, Issues issues) {
+        if (value == null || !value.contains(variable) || !isEndpointPath(value.replace(variable, "validation"))) {
+            issues.add(path, "Expected an absolute path template containing " + variable + ".");
+        }
+    }
+
+    private static void optionalEndpoint(String value, String path, Issues issues) {
+        if (value != null) requiredEndpoint(value, path, issues);
+    }
+
+    private static void positiveIntegerString(String value, int maximum, String path, Issues issues) {
+        int number = nonNegativeInteger(value);
+        if (number < 1 || number > maximum || !Integer.toString(number).equals(value)) {
+            issues.add(path, "Expected a decimal integer string from 1 through " + maximum + ".");
+        }
+    }
+
+    private static void nonNegativeIntegerString(String value, String path, Issues issues) {
+        int number = nonNegativeInteger(value);
+        if (number < 0 || !Integer.toString(number).equals(value)) {
+            issues.add(path, "Expected a non-negative decimal integer string.");
+        }
+    }
+
+    private static int nonNegativeInteger(String value) {
+        try {
+            if (value == null || value.startsWith("+") || value.startsWith("-")) return -1;
+            return Integer.parseInt(value);
+        } catch (NumberFormatException exception) {
+            return -1;
+        }
+    }
+
+    private static void operationResource(AssertionOperation operation, String resource, String path, Issues issues) {
+        if (operation == AssertionOperation.AUTHENTICATE) {
+            if (!isProtectedResourceUri(resource, false)) {
+                issues.add(path, "Expected an absolute HTTPS URI without a fragment.");
+            }
+        } else if (resource != null) {
+            issues.add(path, "resource is only valid for authenticate.");
+        }
+    }
+
+    private static boolean isEndpointPath(String value) {
+        if (!nonEmpty(value) || !value.startsWith("/") || value.startsWith("//")) return false;
+        try {
+            URI uri = URI.create(value);
+            return !uri.isAbsolute() && uri.getRawQuery() == null && uri.getRawFragment() == null;
+        } catch (IllegalArgumentException exception) {
+            return false;
+        }
+    }
+
+    private static boolean isAbsoluteHttpsUri(String value) {
+        if (!nonEmpty(value)) return false;
+        try {
+            URI uri = URI.create(value);
+            return uri.isAbsolute()
+                    && HTTPS.equalsIgnoreCase(uri.getScheme())
+                    && uri.getHost() != null
+                    && uri.getUserInfo() == null
+                    && uri.getFragment() == null;
+        } catch (IllegalArgumentException exception) {
+            return false;
         }
     }
 

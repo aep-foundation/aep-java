@@ -11,6 +11,8 @@ public final class Aep {
     public static final String AUTHENTICATION_SCHEME = "AEP";
     public static final String AUTHORIZATION_HEADER = "AEP-Authorization";
     public static final String WELL_KNOWN_PATH = "/.well-known/aep";
+    public static final String PLATFORM_WELL_KNOWN_PATH = "/.well-known/aep-platform";
+    public static final String DID_MEDIA_TYPE = "application/did+json";
     public static final String DEFAULT_ENDPOINT_BASE = "/aep/";
     public static final String IDENTITY_METHOD_DID_WEB = "did:web";
     public static final String AUTHENTICATION_METHOD_JWT = "aep-jwt";
