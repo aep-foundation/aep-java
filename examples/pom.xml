@@ -11,11 +11,74 @@
   </parent>
 
   <artifactId>aep-examples</artifactId>
-  <packaging>pom</packaging>
   <name>AEP Java Examples</name>
   <description>Runnable Agent, Service, and Platform examples for AEP Java.</description>
 
   <properties>
     <maven.deploy.skip>true</maven.deploy.skip>
   </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>foundation.aep</groupId>
+      <artifactId>aep-agent</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>foundation.aep</groupId>
+      <artifactId>aep-httpserver</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>foundation.aep</groupId>
+      <artifactId>aep-json-jackson2</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>foundation.aep</groupId>
+      <artifactId>aep-platform</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>run-agent-service-example</id>
+            <phase>integration-test</phase>
+            <goals>
+              <goal>exec</goal>
+            </goals>
+            <configuration>
+              <executable>java</executable>
+              <arguments>
+                <argument>-classpath</argument>
+                <classpath />
+                <argument>foundation.aep.examples.AgentServiceExample</argument>
+              </arguments>
+            </configuration>
+          </execution>
+          <execution>
+            <id>run-platform-example</id>
+            <phase>integration-test</phase>
+            <goals>
+              <goal>exec</goal>
+            </goals>
+            <configuration>
+              <executable>java</executable>
+              <arguments>
+                <argument>-classpath</argument>
+                <classpath />
+                <argument>foundation.aep.examples.PlatformExample</argument>
+              </arguments>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
 </project>

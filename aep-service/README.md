@@ -95,3 +95,20 @@ The included in-memory store retains one-way secret verifiers and is intended fo
 Production stores implement `ServiceCredentialStore` with durable, atomic identifier uniqueness,
 authentication, expiry, and revocation. Custom Grant Types continue to use `GrantTypeDefinition`
 and `CredentialAuthenticator` directly.
+
+## Advertise and enforce claims
+
+The three claim lists in the Inspect document communicate how the Service uses Agent-provided
+values:
+
+- `required` values must be present before enrollment can succeed;
+- `preferred` values improve the Service experience but do not block enrollment;
+- `optional` values may be supplied without being requested.
+
+`AepService` checks required advertised values before invoking the enrollment policy. The policy
+can return additional `requirementsPending` or `verificationPending` values when an application
+workflow needs owner action or independent verification. Applications should persist only claims
+needed for their stated purpose and apply their own retention controls.
+
+The runnable [Agent and Service example](../examples/README.md#agent-and-service) combines required
+contact and address claims, API-key issuance, protected-resource authentication, and revocation.
