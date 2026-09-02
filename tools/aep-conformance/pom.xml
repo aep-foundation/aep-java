@@ -12,11 +12,34 @@
   </parent>
 
   <artifactId>aep-conformance</artifactId>
-  <packaging>pom</packaging>
   <name>AEP Java Conformance Tools</name>
   <description>AEP Java role and profile conformance adapters.</description>
 
   <properties>
+    <automatic.module.name>foundation.aep.conformance</automatic.module.name>
     <maven.deploy.skip>true</maven.deploy.skip>
   </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>aep-json-jackson2</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>aep-agent</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>aep-service</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>aep-platform</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+  </dependencies>
 </project>

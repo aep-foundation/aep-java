@@ -118,6 +118,16 @@ The Maven Wrapper provides the complete repository gate:
 ./scripts/verify-consumer.sh
 ```
 
+The shared Agent, Service, Platform, and credential-profile conformance reports can be generated against a local
+`aep-specs` checkout:
+
+```sh
+./scripts/run-conformance.sh
+```
+
+Set `AEP_SPECS_DIR` when the specifications repository is not located at `../aep-specs`. Reports are written to
+`.conformance/reports/`.
+
 Format Java sources with:
 
 ```sh
