@@ -492,7 +492,7 @@ public final class PlatformIdentityProvider implements AgentIdentityProvider {
         }
         URI expected;
         try {
-            expected = DidWeb.documentUri(identity.agentDid(), allowInsecureLoopback);
+            expected = DidWeb.documentUri(identity.agentDid(), false);
         } catch (IllegalArgumentException exception) {
             throw new AepAgentException(
                     PLATFORM_IDENTITY_INVALID, "AEP Platform returned an invalid hosted identity", exception);

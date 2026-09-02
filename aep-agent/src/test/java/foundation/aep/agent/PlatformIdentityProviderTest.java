@@ -255,6 +255,30 @@ class PlatformIdentityProviderTest {
     }
 
     @Test
+    void acceptsNormativeHttpsDidDocumentsFromALoopbackPlatform() {
+        String loopbackDid = "did:web:127.0.0.1%3A4310:agents:managed";
+        String loopbackDiscovery = discovery()
+                .replace(
+                        "https://p.example/a/{agent_did_id}/did.json",
+                        "https://127.0.0.1:4310/agents/{agent_did_id}/did.json");
+        String loopbackIdentity = identity()
+                .replace(AGENT_DID, loopbackDid)
+                .replace("https://p.example/a/4Yf7p2xQd9/did.json", "https://127.0.0.1:4310/agents/managed/did.json");
+        QueueTransport transport = new QueueTransport(
+                aepResponse(200, loopbackDiscovery),
+                aepResponse(200, "{\"count\":\"1\",\"data\":[" + loopbackIdentity + "],\"total\":\"1\"}"));
+        PlatformIdentityProvider provider = PlatformIdentityProvider.builder(URI.create("http://127.0.0.1:4310"))
+                .transport(transport)
+                .allowInsecureLoopback(true)
+                .build();
+
+        AgentIdentity selected =
+                provider.getOrCreate(SERVICE, SERVICE_DID).toCompletableFuture().join();
+
+        assertEquals(loopbackDid, selected.did());
+    }
+
+    @Test
     void pendingStagesRejectAReusedIdempotencyKeyAndRetryAfterHeader() {
         QueueTransport duplicateTransport = new QueueTransport(
                 aepResponse(200, discovery()), aepResponse(200, activeList()), aepResponse(202, pendingSign()));
