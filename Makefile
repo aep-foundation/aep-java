@@ -1,4 +1,4 @@
-.PHONY: clean format format-check verify
+.PHONY: clean format format-check interoperability verify
 
 clean:
 	./mvnw clean
@@ -8,6 +8,9 @@ format:
 
 format-check:
 	./mvnw spotless:check
+
+interoperability:
+	./scripts/run-node-interoperability.sh
 
 verify:
 	./mvnw verify

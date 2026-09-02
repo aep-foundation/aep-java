@@ -26,6 +26,15 @@ Format Java sources with:
 ./mvnw spotless:apply
 ```
 
+Run the bidirectional Java and Node.js interoperability flow with adjacent repository checkouts:
+
+```sh
+AEP_NODE_DIR=../aep-node make interoperability
+```
+
+The flow runs the Java Agent against the Node.js Service and Platform, then the Node.js Agent
+against the Java Service and Platform. Its report is written under `.interop/reports/`.
+
 ## Module boundaries
 
 `aep-core` owns transport-independent wire contracts, validation, identity and assertion
