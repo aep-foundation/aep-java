@@ -22,6 +22,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Check out AEP specifications
+        uses: actions/checkout@v7
+        with:
+          repository: aep-foundation/aep-specs
+          path: .conformance/aep-specs
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: .conformance/aep-specs/ietf
+
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -37,3 +49,17 @@ jobs:
       - name: Verify Spring Framework 7 compatibility
         if: matrix.java == '17'
         run: ./mvnw --batch-mode --no-transfer-progress -pl aep-spring-webmvc -am -Pspring7 verify
+
+      - name: Run shared conformance harness
+        run: ./scripts/run-conformance.sh
+        env:
+          AEP_SPECS_DIR: .conformance/aep-specs
+
+      - name: Upload conformance reports
+        if: matrix.java == '17'
+        uses: actions/upload-artifact@v7
+        with:
+          name: aep-java-conformance
+          path: .conformance/reports/*.json
+          if-no-files-found: error
+          retention-days: 7

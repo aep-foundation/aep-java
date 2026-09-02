@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.Set;
 
 final class AepRawJson {
+    private static final String CLAIM_VALUES = "claim values";
     private static final String INSPECT_DOCUMENT = "Inspect document";
     private static final String NON_NULL_MESSAGE = "Expected a non-null value.";
 
@@ -13,7 +14,7 @@ final class AepRawJson {
     static void claimValues(Map<String, Object> value) {
         rejectNullPaths(
                 value,
-                "claim values",
+                CLAIM_VALUES,
                 "contact.address.primary",
                 "contact.email",
                 "contact.mobile",
@@ -21,21 +22,37 @@ final class AepRawJson {
                 "person.first_name",
                 "person.last_name",
                 "person.username");
+        requireStrings(
+                value,
+                "contact.email",
+                "contact.mobile",
+                "person.birthdate",
+                "person.first_name",
+                "person.last_name",
+                "person.username");
         Object address = value.get("contact.address.primary");
-        if (address instanceof Map<?, ?> object) {
-            if (object.containsKey("postal_code")) {
+        if (address == null) return;
+        if (!(address instanceof Map<?, ?> object)) {
+            throw new AepValidationException(
+                    CLAIM_VALUES, List.of(new ValidationIssue("$.contact.address.primary", "Expected an object.")));
+        }
+        if (object.containsKey("postal_code")) {
+            throw new AepValidationException(
+                    CLAIM_VALUES,
+                    List.of(new ValidationIssue(
+                            "$.contact.address.primary.postal_code", "Expected the postcode member.")));
+        }
+        for (String member : List.of(
+                "city", "country", "first_name", "last_name", "line1", "line2", "line3", "postcode", "region")) {
+            if (object.containsKey(member) && object.get(member) == null) {
                 throw new AepValidationException(
-                        "claim values",
-                        List.of(new ValidationIssue(
-                                "$.contact.address.primary.postal_code", "Expected the postcode member.")));
+                        CLAIM_VALUES,
+                        List.of(new ValidationIssue("$.contact.address.primary." + member, NON_NULL_MESSAGE)));
             }
-            for (String member : List.of(
-                    "city", "country", "first_name", "last_name", "line1", "line2", "line3", "postcode", "region")) {
-                if (object.containsKey(member) && object.get(member) == null) {
-                    throw new AepValidationException(
-                            "claim values",
-                            List.of(new ValidationIssue("$.contact.address.primary." + member, NON_NULL_MESSAGE)));
-                }
+            if (object.containsKey(member) && !(object.get(member) instanceof String)) {
+                throw new AepValidationException(
+                        CLAIM_VALUES,
+                        List.of(new ValidationIssue("$.contact.address.primary." + member, "Expected a string.")));
             }
         }
     }
@@ -119,6 +136,15 @@ final class AepRawJson {
             if (!value.containsKey(member)) {
                 throw new AepValidationException(
                         documentType, List.of(new ValidationIssue("$." + member, "Expected a required member.")));
+            }
+        }
+    }
+
+    private static void requireStrings(Map<String, Object> value, String... members) {
+        for (String member : members) {
+            if (value.containsKey(member) && !(value.get(member) instanceof String)) {
+                throw new AepValidationException(
+                        CLAIM_VALUES, List.of(new ValidationIssue("$." + member, "Expected a string.")));
             }
         }
     }

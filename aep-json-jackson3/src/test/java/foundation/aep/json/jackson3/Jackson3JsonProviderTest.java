@@ -74,6 +74,7 @@ final class Jackson3JsonProviderTest {
                 AepValidationException.class,
                 () -> AepJson.parseClaimValues(
                         "{\"contact.address.primary\":{\"country\":\"US\",\"first_name\":\"Ada\",\"last_name\":\"Lovelace\",\"line1\":\"1 Main\",\"postal_code\":\"94105\"}}"));
+        assertThrows(AepValidationException.class, () -> AepJson.parseClaimValues("{\"person.first_name\":42}"));
     }
 
     @Test
