@@ -19,16 +19,22 @@ public final class GrantResponses { // NOPMD - Namespace for the related built-i
             @JsonProperty("credential_id") String credentialId,
             @JsonProperty("expires_at") String expiresAt,
             List<String> scopes,
+            @JsonProperty("token_format") String tokenFormat,
             @JsonProperty("token_type") String tokenType)
             implements BuiltIn {
         public OAuthBearer {
             scopes = Copies.list(scopes);
         }
 
+        public OAuthBearer(
+                String accessToken, String credentialId, String expiresAt, List<String> scopes, String tokenType) {
+            this(accessToken, credentialId, expiresAt, scopes, null, tokenType);
+        }
+
         @Override
         public String toString() {
             return "OAuthBearer[accessToken=<redacted>, credentialId=" + credentialId + ", expiresAt=" + expiresAt
-                    + ", scopes=" + scopes + ", tokenType=" + tokenType + "]";
+                    + ", scopes=" + scopes + ", tokenFormat=" + tokenFormat + ", tokenType=" + tokenType + "]";
         }
     }
 

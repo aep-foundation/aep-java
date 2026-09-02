@@ -58,6 +58,23 @@ final class AepRawJson {
         rejectKnownNulls(value.get("bindings"), "$.bindings", "supported");
         rejectKnownNulls(value.get("claims"), "$.claims", "required", "preferred", "optional");
         rejectKnownNulls(value.get("commands"), "$.commands", "supported", "grant_types", "grant_types_config");
+        Object commands = value.get("commands");
+        if (commands instanceof Map<?, ?> commandObject) {
+            Object configurations = commandObject.get("grant_types_config");
+            if (configurations instanceof Map<?, ?> configurationObject) {
+                configurationObject.forEach((grantType, configuration) -> rejectKnownNulls(
+                        configuration,
+                        "$.commands.grant_types_config." + grantType,
+                        "access_token_formats",
+                        "default_lifetime_seconds",
+                        "header_names",
+                        "realm",
+                        "scopes_supported",
+                        "supports_per_credential_revoke",
+                        "introspection_endpoint",
+                        "revocation_endpoint"));
+            }
+        }
         rejectKnownNulls(value.get("core"), "$.core", "signing_algorithms");
         rejectKnownNulls(value.get("extensions"), "$.extensions", "supported");
         rejectKnownNulls(value.get("identity"), "$.identity", "methods");

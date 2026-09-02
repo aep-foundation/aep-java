@@ -58,22 +58,26 @@ ServiceResponse<EnrollResponse> response = service.enroll(
 response headers. The HTTP adapter module maps that framework-neutral result onto a server
 framework.
 
-## Add a Grant Type
+## Add a credential profile
 
-Register one handler for every Grant Type advertised by the Inspect document. A successful handler
-returns the stable Service-wide credential identifier together with the concrete response object:
+Use a shared credential store with one stored definition for every built-in Grant Type advertised by
+the Inspect document:
 
 ```java
-GrantTypeDefinition apiKey = new GrantTypeDefinition(
-    "api-key",
-    grantTypeHandler);
+ServiceCredentialStore credentialStore = ServiceCredentialStore.inMemory();
+InspectDocument.GrantTypeConfig apiKeyConfig =
+    document.commands().grantTypesConfig().get(Aep.GRANT_TYPE_API_KEY);
+StoredCredentialGrantType apiKey = StoredCredentialGrantTypes.apiKey(
+    apiKeyConfig,
+    (request, context) -> CompletableFuture.completedFuture(issueApiKey(context)),
+    credentialStore);
 
 AepService service = AepService.builder(document, assertionVerifier)
-    .grantType(apiKey)
-    .credentialAuthenticator("api-key", credentialAuthenticator)
+    .storedCredentialGrantType(apiKey)
     .build();
 ```
 
-Concrete API-key, Basic, and OAuth Bearer credential profiles are separate integrations. Custom
-handlers must implement issuance, presentation, expiry, and revocation according to their Grant
-Type specification.
+The included in-memory store retains one-way secret verifiers and is intended for development.
+Production stores implement `ServiceCredentialStore` with durable, atomic identifier uniqueness,
+authentication, expiry, and revocation. Custom Grant Types continue to use `GrantTypeDefinition`
+and `CredentialAuthenticator` directly.

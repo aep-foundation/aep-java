@@ -35,7 +35,13 @@ public interface AgentCredentialStore {
 
             @Override
             public synchronized CompletionStage<Void> save(AgentCredential credential) {
-                credentials.put(key(credential.serviceDid(), credential.credentialId()), credential);
+                String key = key(credential.serviceDid(), credential.credentialId());
+                AgentCredential existing = credentials.get(key);
+                if (existing != null && !existing.equals(credential)) {
+                    return CompletableFuture.failedFuture(
+                            new IllegalArgumentException("AEP credential identifier has been reassigned."));
+                }
+                credentials.put(key, credential);
                 return CompletableFuture.completedFuture(null);
             }
 

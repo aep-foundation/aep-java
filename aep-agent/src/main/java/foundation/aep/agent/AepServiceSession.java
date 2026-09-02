@@ -85,18 +85,24 @@ public final class AepServiceSession {
     }
 
     public CompletableFuture<AgentGrantResult> grant(String grantType, List<String> requestedScopes) {
-        Objects.requireNonNull(grantType, "grantType");
-        List<String> scopes = requestedScopes == null ? List.of() : List.copyOf(requestedScopes);
+        return grant(new GrantRequest(grantType, requestedScopes));
+    }
+
+    public CompletableFuture<AgentGrantResult> grant(GrantRequest request) {
+        Objects.requireNonNull(request, "request");
+        requireValid("Grant request", AepValidation.grantRequest(request));
         return commandContext(AepCommand.GRANT).thenCompose(context -> {
             InspectDocument.Commands commands = context.inspection.document().commands();
-            if (!commands.grantTypes().contains(grantType)) {
-                return failed("grant_type_not_advertised", "AEP Service does not advertise Grant Type " + grantType);
+            if (!commands.grantTypes().contains(request.grantType())) {
+                return failed(
+                        "grant_type_not_advertised",
+                        "AEP Service does not advertise Grant Type " + request.grantType());
             }
             if (!commands.supported().contains(AepCommand.STATUS.value())) {
                 return failed("command_not_advertised", "AEP Grant requires advertised Status support");
             }
             return execute(context, AepCommand.STATUS, "GET", null, null, AepJson::parseStatusResponse)
-                    .thenCompose(status -> grantActive(context, status, grantType, scopes));
+                    .thenCompose(status -> grantActive(context, status, request));
         });
     }
 
@@ -303,15 +309,13 @@ public final class AepServiceSession {
     }
 
     private CompletableFuture<AgentGrantResult> grantActive(
-            CommandContext context, StatusResponse status, String grantType, List<String> scopes) {
+            CommandContext context, StatusResponse status, GrantRequest request) {
         if (status.status() != AgentStatus.ACTIVE) {
             return failed("enrollment_not_active", "AEP Grant requires active enrollment");
         }
-        String key = idempotencyKey(context, AepCommand.GRANT, grantType);
-        GrantRequest request = new GrantRequest(grantType, scopes);
-        requireValid("Grant request", AepValidation.grantRequest(request));
+        String key = idempotencyKey(context, AepCommand.GRANT, request.grantType());
         return execute(context, AepCommand.GRANT, "POST", request, key, Function.identity())
-                .thenCompose(json -> storeGrant(context, grantType, json));
+                .thenCompose(json -> storeGrant(context, request.grantType(), json));
     }
 
     private CompletableFuture<AgentGrantResult> storeGrant(CommandContext context, String grantType, String json) {

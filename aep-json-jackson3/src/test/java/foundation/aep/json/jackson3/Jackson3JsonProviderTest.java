@@ -16,8 +16,12 @@ final class Jackson3JsonProviderTest {
         String json = """
                 {
                   "aep_version":"1.0",
+                  "authentication":{"methods":["api-key"]},
                   "bindings":{"supported":["http"]},
-                  "commands":{"supported":["inspect","enroll"],"future":true},
+                  "commands":{"supported":["inspect","enroll","grant","revoke","status"],
+                    "grant_types":["api-key"],
+                    "grant_types_config":{"api-key":{"header_names":["x-service-key"],
+                      "supports_per_credential_revoke":"true"}},"future":true},
                   "core":{"signing_algorithms":["EdDSA","ES256"]},
                   "http":{"endpoint_base":"/aep"},
                   "identity":{"methods":["did:web"]},
@@ -29,6 +33,13 @@ final class Jackson3JsonProviderTest {
         assertEquals(
                 "did:web:service.example",
                 AepJson.parseInspectDocument(json).service().did());
+        assertEquals(
+                List.of("x-service-key"),
+                AepJson.parseInspectDocument(json)
+                        .commands()
+                        .grantTypesConfig()
+                        .get("api-key")
+                        .headerNames());
         assertEquals(
                 "1.0",
                 AepJson.parseInspectDocument(AepJson.write(AepJson.parseInspectDocument(json)))
@@ -100,6 +111,11 @@ final class Jackson3JsonProviderTest {
                 AepJson.parseGrantRequest("{\"grant_type\":\"api-key\",\"requested_scopes\":[]}")
                         .grantType());
         assertEquals(
+                "jwt",
+                AepJson.parseGrantRequest(
+                                "{\"grant_type\":\"oauth-bearer\",\"label\":\"prod\",\"token_format\":\"jwt\"}")
+                        .tokenFormat());
+        assertEquals(
                 "true",
                 AepJson.parseRevokeRequest("{\"all_grant_types\":\"true\"}").allGrantTypes());
         assertEquals(new foundation.aep.core.RevokeResponse(), AepJson.parseRevokeResponse("{}"));
@@ -122,6 +138,11 @@ final class Jackson3JsonProviderTest {
                 AepJson.parseOAuthBearerGrantResponse(
                                 "{\"access_token\":\"token\",\"credential_id\":\"credential-1\",\"expires_at\":\"2026-09-01T12:00:00Z\",\"token_type\":\"Bearer\"}")
                         .tokenType());
+        assertEquals(
+                "jwt",
+                AepJson.parseOAuthBearerGrantResponse(
+                                "{\"access_token\":\"token\",\"credential_id\":\"credential-1\",\"expires_at\":\"2026-09-01T12:00:00Z\",\"token_format\":\"jwt\",\"token_type\":\"Bearer\"}")
+                        .tokenFormat());
         assertEquals(
                 "credential-1",
                 AepJson.parseBuiltInGrantResponse(

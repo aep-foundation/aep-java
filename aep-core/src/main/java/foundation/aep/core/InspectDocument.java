@@ -115,7 +115,24 @@ public final class InspectDocument {
     }
 
     public record GrantTypeConfig(
-            @JsonProperty("supports_per_credential_revoke") String supportsPerCredentialRevoke) {}
+            @JsonProperty("access_token_formats") List<String> accessTokenFormats,
+            @JsonProperty("default_lifetime_seconds") String defaultLifetimeSeconds,
+            @JsonProperty("header_names") List<String> headerNames,
+            String realm,
+            @JsonProperty("scopes_supported") List<String> scopesSupported,
+            @JsonProperty("supports_per_credential_revoke") String supportsPerCredentialRevoke,
+            @JsonProperty("introspection_endpoint") String introspectionEndpoint,
+            @JsonProperty("revocation_endpoint") String revocationEndpoint) {
+        public GrantTypeConfig {
+            accessTokenFormats = Copies.nullableList(accessTokenFormats);
+            headerNames = Copies.nullableList(headerNames);
+            scopesSupported = Copies.nullableList(scopesSupported);
+        }
+
+        public GrantTypeConfig(String supportsPerCredentialRevoke) {
+            this(null, null, null, null, null, supportsPerCredentialRevoke, null, null);
+        }
+    }
 
     public record Core(@JsonProperty("signing_algorithms") List<String> signingAlgorithms) {
         public Core {
