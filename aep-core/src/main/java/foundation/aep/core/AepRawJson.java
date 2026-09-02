@@ -75,11 +75,15 @@ final class AepRawJson {
     }
 
     static void protectedResourceAuthorization(Map<String, Object> value) {
+        rejectUnknownMembers(value, "protected-resource authorization", "carrier", "scheme", "credentials");
+    }
+
+    static void rejectUnknownMembers(Map<String, Object> value, String documentType, String... members) {
+        Set<String> allowed = Set.of(members);
         for (String member : value.keySet()) {
-            if (!Set.of("carrier", "scheme", "credentials").contains(member)) {
+            if (!allowed.contains(member)) {
                 throw new AepValidationException(
-                        "protected-resource authorization",
-                        List.of(new ValidationIssue("$", "Expected no unknown members.")));
+                        documentType, List.of(new ValidationIssue("$", "Expected no unknown members.")));
             }
         }
     }

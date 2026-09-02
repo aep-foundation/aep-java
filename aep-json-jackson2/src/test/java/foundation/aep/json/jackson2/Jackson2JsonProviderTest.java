@@ -154,4 +154,28 @@ final class Jackson2JsonProviderTest {
                 () -> AepJson.parseProtectedResourceAuthorization(
                         "{\"carrier\":\"Authorization\",\"scheme\":\"Bearer\",\"credentials\":\"token\",\"future\":true}"));
     }
+
+    @Test
+    void parsesPlatformWireDocuments() {
+        assertEquals(
+                "Example Platform",
+                AepJson.parsePlatformDiscoveryDocument(
+                                "{\"aep_version\":\"1.0\",\"endpoints\":{\"lifecycle\":\"/v1/aep/agent-identities/{agent_identity_id}\",\"list\":\"/v1/aep/agent-identities\",\"provision\":\"/v1/aep/agent-identities\",\"sign\":\"/v1/aep/agent-identities/{agent_identity_id}/sign\"},\"http\":{\"endpoint_base\":\"/v1/aep\"},\"identity\":{\"did_methods\":[\"did:web\"],\"did_url_template\":\"https://p.example/a/{agent_did_id}/did.json\"},\"platform\":{\"hosted_verification\":false,\"name\":\"Example Platform\"},\"signing\":{\"algorithms\":[\"ES256\"],\"default_lifetime_seconds\":\"300\"}}")
+                        .platform()
+                        .name());
+        assertEquals(
+                foundation.aep.core.AssertionOperation.ENROLL,
+                AepJson.parsePlatformSignRequest(
+                                "{\"jti\":\"assertion-1\",\"op\":\"enroll\",\"service_did\":\"did:web:service.example\"}")
+                        .operation());
+        assertEquals(
+                "5",
+                ((foundation.aep.core.PlatformSignResponses.Pending) AepJson.parsePlatformSignResponse(
+                                "{\"status\":\"pending\",\"retry_after_seconds\":\"5\"}"))
+                        .retryAfterSeconds());
+        assertThrows(
+                AepValidationException.class,
+                () -> AepJson.parsePlatformProvisionRequest(
+                        "{\"service_did\":\"did:web:service.example\",\"extra\":true}"));
+    }
 }

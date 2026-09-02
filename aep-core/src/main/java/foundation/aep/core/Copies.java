@@ -38,6 +38,10 @@ final class Copies {
         return Collections.unmodifiableMap(copy);
     }
 
+    static Map<String, Object> nullableJsonMap(Map<String, Object> values) {
+        return values == null ? null : jsonMap(values);
+    }
+
     private static Object jsonValue(Object value) {
         if (value instanceof Map<?, ?> map) {
             Map<Object, Object> copy = new LinkedHashMap<>();

@@ -8,20 +8,36 @@ import java.util.function.Function;
 /** JSON encoding and native validation using an application-selected Jackson adapter. */
 public final class AepJson {
     private static final String API_KEY_RESPONSE = "API-key Grant response";
+    private static final String AGENT_DID = "agent_did";
     private static final String BASIC_RESPONSE = "Basic Grant response";
     private static final String CLIENT_ASSERTION = "client assertion claims";
+    private static final String CLIENT_ASSERTION_FIELD = "client_assertion";
     private static final String CREDENTIAL_ID = "credential_id";
     private static final String ENROLL_REQUEST = "Enroll request";
     private static final String ENROLL_RESPONSE = "Enroll response";
     private static final String EXPIRES_AT = "expires_at";
     private static final String GRANT_REQUEST = "Grant request";
     private static final String IDEMPOTENCY_METADATA = "Idempotency metadata";
+    private static final String JWT_ID = "jti";
     private static final String OAUTH_RESPONSE = "OAuth Bearer Grant response";
     private static final String OPENAPI_SCHEME = "OpenAPI AEP security scheme";
     private static final String PROBLEM_DETAILS = "Problem Details";
     private static final String PROTECTED_AUTHORIZATION = "protected-resource authorization";
+    private static final String RESOURCE = "resource";
+    private static final String SERVICE_DID = "service_did";
     private static final String STATUS = "status";
     private static final String STATUS_RESPONSE = "Status response";
+    private static final String PLATFORM_AGENT_IDENTITY = "Platform Agent identity";
+    private static final String PLATFORM_AGENT_IDENTITY_LIST = "Platform Agent identity list response";
+    private static final String PLATFORM_DISCOVERY = "Platform discovery document";
+    private static final String PLATFORM_LIFECYCLE_REQUEST = "Platform lifecycle request";
+    private static final String PLATFORM_PROVISION_REQUEST = "Platform provision request";
+    private static final String PLATFORM_SIGN_REQUEST = "Platform sign request";
+    private static final String PLATFORM_SIGN_RESPONSE = "Platform sign response";
+    private static final String PLATFORM_VERIFICATION_REQUEST = "Platform verification request";
+    private static final String PLATFORM_VERIFICATION_RESPONSE = "Platform verification response";
+    private static final String SIGN_COMPLETED = "completed";
+    private static final String SIGN_PENDING = "pending";
     private static final int REQUIRED_PROVIDER_COUNT = 1;
     private static final AepJsonProvider PROVIDER = loadProvider();
 
@@ -50,8 +66,8 @@ public final class AepJson {
 
     public static EnrollRequest parseEnrollRequest(String json) {
         Map<String, Object> value = object(json, ENROLL_REQUEST);
-        AepRawJson.requireMembers(value, ENROLL_REQUEST, "agent_did");
-        AepRawJson.rejectNullPaths(value, ENROLL_REQUEST, "agent_did", "claims", "idempotency_key");
+        AepRawJson.requireMembers(value, ENROLL_REQUEST, AGENT_DID);
+        AepRawJson.rejectNullPaths(value, ENROLL_REQUEST, AGENT_DID, "claims", "idempotency_key");
         return parse(json, EnrollRequest.class, ENROLL_REQUEST, AepValidation::enrollRequest);
     }
 
@@ -105,8 +121,8 @@ public final class AepJson {
 
     public static ClientAssertionClaims parseClientAssertionClaims(String json) {
         Map<String, Object> value = object(json, CLIENT_ASSERTION);
-        AepRawJson.requireMembers(value, CLIENT_ASSERTION, "iss", "sub", "aud", "op", "iat", "exp", "jti");
-        AepRawJson.rejectNullPaths(value, CLIENT_ASSERTION, "iss", "sub", "aud", "op", "iat", "exp", "jti", "resource");
+        AepRawJson.requireMembers(value, CLIENT_ASSERTION, "iss", "sub", "aud", "op", "iat", "exp", JWT_ID);
+        AepRawJson.rejectNullPaths(value, CLIENT_ASSERTION, "iss", "sub", "aud", "op", "iat", "exp", JWT_ID, RESOURCE);
         return parse(json, ClientAssertionClaims.class, CLIENT_ASSERTION, AepValidation::clientAssertionClaims);
     }
 
@@ -114,7 +130,7 @@ public final class AepJson {
         Map<String, Object> value = object(json, IDEMPOTENCY_METADATA);
         AepRawJson.requireMembers(value, IDEMPOTENCY_METADATA, "idempotency_key");
         AepRawJson.rejectNullPaths(
-                value, IDEMPOTENCY_METADATA, "agent_did", "idempotency_key", "first_body_hash", "second_body_hash");
+                value, IDEMPOTENCY_METADATA, AGENT_DID, "idempotency_key", "first_body_hash", "second_body_hash");
         return parse(json, IdempotencyMetadata.class, IDEMPOTENCY_METADATA, AepValidation::idempotencyMetadata);
     }
 
@@ -134,6 +150,165 @@ public final class AepJson {
                 "requirements_pending",
                 "verification_pending");
         return parse(json, ProblemDetails.class, PROBLEM_DETAILS, AepValidation::problemDetails);
+    }
+
+    public static PlatformDiscoveryDocument parsePlatformDiscoveryDocument(String json) {
+        Map<String, Object> value = object(json, PLATFORM_DISCOVERY);
+        AepRawJson.requireMembers(
+                value, PLATFORM_DISCOVERY, "aep_version", "endpoints", "http", "identity", "platform", "signing");
+        AepRawJson.rejectNullPaths(
+                value, PLATFORM_DISCOVERY, "aep_version", "endpoints", "http", "identity", "platform", "signing");
+        return parse(
+                json, PlatformDiscoveryDocument.class, PLATFORM_DISCOVERY, AepValidation::platformDiscoveryDocument);
+    }
+
+    public static PlatformAgentIdentity parsePlatformAgentIdentity(String json) {
+        Map<String, Object> value = object(json, PLATFORM_AGENT_IDENTITY);
+        AepRawJson.requireMembers(
+                value,
+                PLATFORM_AGENT_IDENTITY,
+                AGENT_DID,
+                "agent_identity_id",
+                "created_at",
+                "did_document_url",
+                "key_id",
+                SERVICE_DID,
+                "signing_algorithms",
+                "status",
+                "updated_at");
+        AepRawJson.rejectNullPaths(
+                value,
+                PLATFORM_AGENT_IDENTITY,
+                AGENT_DID,
+                "agent_identity_id",
+                "created_at",
+                "did_document_url",
+                "key_id",
+                SERVICE_DID,
+                "signing_algorithms",
+                "status",
+                "updated_at");
+        return parse(json, PlatformAgentIdentity.class, PLATFORM_AGENT_IDENTITY, AepValidation::platformAgentIdentity);
+    }
+
+    public static PlatformAgentIdentityListResponse parsePlatformAgentIdentityListResponse(String json) {
+        Map<String, Object> value = object(json, PLATFORM_AGENT_IDENTITY_LIST);
+        AepRawJson.requireMembers(value, PLATFORM_AGENT_IDENTITY_LIST, "count", "data", "total");
+        AepRawJson.rejectNullPaths(value, PLATFORM_AGENT_IDENTITY_LIST, "count", "data", "total");
+        return parse(
+                json,
+                PlatformAgentIdentityListResponse.class,
+                PLATFORM_AGENT_IDENTITY_LIST,
+                AepValidation::platformAgentIdentityListResponse);
+    }
+
+    public static PlatformProvisionRequest parsePlatformProvisionRequest(String json) {
+        Map<String, Object> value = object(json, PLATFORM_PROVISION_REQUEST);
+        AepRawJson.requireMembers(value, PLATFORM_PROVISION_REQUEST, SERVICE_DID);
+        AepRawJson.rejectNullPaths(value, PLATFORM_PROVISION_REQUEST, SERVICE_DID);
+        AepRawJson.rejectUnknownMembers(value, PLATFORM_PROVISION_REQUEST, SERVICE_DID);
+        return parse(
+                json,
+                PlatformProvisionRequest.class,
+                PLATFORM_PROVISION_REQUEST,
+                AepValidation::platformProvisionRequest);
+    }
+
+    public static PlatformLifecycleRequest parsePlatformLifecycleRequest(String json) {
+        Map<String, Object> value = object(json, PLATFORM_LIFECYCLE_REQUEST);
+        AepRawJson.requireMembers(value, PLATFORM_LIFECYCLE_REQUEST, STATUS);
+        AepRawJson.rejectNullPaths(value, PLATFORM_LIFECYCLE_REQUEST, STATUS);
+        AepRawJson.rejectUnknownMembers(value, PLATFORM_LIFECYCLE_REQUEST, STATUS);
+        return parse(
+                json,
+                PlatformLifecycleRequest.class,
+                PLATFORM_LIFECYCLE_REQUEST,
+                AepValidation::platformLifecycleRequest);
+    }
+
+    public static PlatformSignRequest parsePlatformSignRequest(String json) {
+        Map<String, Object> value = object(json, PLATFORM_SIGN_REQUEST);
+        AepRawJson.requireMembers(value, PLATFORM_SIGN_REQUEST, JWT_ID, "op", SERVICE_DID);
+        AepRawJson.rejectNullPaths(
+                value,
+                PLATFORM_SIGN_REQUEST,
+                JWT_ID,
+                "lifetime_seconds",
+                "op",
+                "platform_context",
+                RESOURCE,
+                SERVICE_DID);
+        AepRawJson.rejectUnknownMembers(
+                value,
+                PLATFORM_SIGN_REQUEST,
+                JWT_ID,
+                "lifetime_seconds",
+                "op",
+                "platform_context",
+                RESOURCE,
+                SERVICE_DID);
+        return parse(json, PlatformSignRequest.class, PLATFORM_SIGN_REQUEST, AepValidation::platformSignRequest);
+    }
+
+    public static PlatformSignResponses.Response parsePlatformSignResponse(String json) {
+        Map<String, Object> value = object(json, PLATFORM_SIGN_RESPONSE);
+        AepRawJson.requireMembers(value, PLATFORM_SIGN_RESPONSE, STATUS);
+        AepRawJson.rejectNullPaths(value, PLATFORM_SIGN_RESPONSE, STATUS, "platform_context");
+        Object status = value.get(STATUS);
+        PlatformSignResponses.Response response;
+        if (SIGN_COMPLETED.equals(status)) {
+            AepRawJson.requireMembers(
+                    value,
+                    PLATFORM_SIGN_RESPONSE,
+                    AGENT_DID,
+                    CLIENT_ASSERTION_FIELD,
+                    "expires_at",
+                    "issued_at",
+                    JWT_ID,
+                    SERVICE_DID);
+            response = PROVIDER.decode(json, PlatformSignResponses.Completed.class);
+        } else if (SIGN_PENDING.equals(status)) {
+            AepRawJson.requireMembers(value, PLATFORM_SIGN_RESPONSE, "retry_after_seconds");
+            response = PROVIDER.decode(json, PlatformSignResponses.Pending.class);
+        } else {
+            throw new AepValidationException(
+                    PLATFORM_SIGN_RESPONSE, List.of(new ValidationIssue("$.status", "Expected completed or pending.")));
+        }
+        return AepValidation.requirePlatformSignResponse(response);
+    }
+
+    public static PlatformVerificationRequest parsePlatformVerificationRequest(String json) {
+        Map<String, Object> value = object(json, PLATFORM_VERIFICATION_REQUEST);
+        AepRawJson.requireMembers(value, PLATFORM_VERIFICATION_REQUEST, CLIENT_ASSERTION_FIELD, "op", SERVICE_DID);
+        AepRawJson.rejectNullPaths(
+                value, PLATFORM_VERIFICATION_REQUEST, CLIENT_ASSERTION_FIELD, "op", RESOURCE, SERVICE_DID);
+        AepRawJson.rejectUnknownMembers(
+                value, PLATFORM_VERIFICATION_REQUEST, CLIENT_ASSERTION_FIELD, "op", RESOURCE, SERVICE_DID);
+        return parse(
+                json,
+                PlatformVerificationRequest.class,
+                PLATFORM_VERIFICATION_REQUEST,
+                AepValidation::platformVerificationRequest);
+    }
+
+    public static PlatformVerificationResponse parsePlatformVerificationResponse(String json) {
+        Map<String, Object> value = object(json, PLATFORM_VERIFICATION_RESPONSE);
+        AepRawJson.requireMembers(value, PLATFORM_VERIFICATION_RESPONSE, "reason", SERVICE_DID, "verified");
+        AepRawJson.rejectNullPaths(
+                value,
+                PLATFORM_VERIFICATION_RESPONSE,
+                AGENT_DID,
+                "agent_identity_id",
+                "op",
+                "reason",
+                SERVICE_DID,
+                STATUS,
+                "verified");
+        return parse(
+                json,
+                PlatformVerificationResponse.class,
+                PLATFORM_VERIFICATION_RESPONSE,
+                AepValidation::platformVerificationResponse);
     }
 
     public static GrantResponses.OAuthBearer parseOAuthBearerGrantResponse(String json) {
