@@ -68,6 +68,36 @@ final class PlatformProtocolTest {
         assertEquals(2, AepValidation.platformDiscoveryDocument(malformed).size());
     }
 
+    @Test
+    void validatesPlatformIdentityListPagination() {
+        PlatformAgentIdentity identity = new PlatformAgentIdentity(
+                "did:web:p.example:a:4Yf7p2xQd9",
+                "pai_01J0AEPPLATFORM000000000001",
+                "2026-07-06T12:00:00Z",
+                "https://p.example/a/4Yf7p2xQd9/did.json",
+                "did:web:p.example:a:4Yf7p2xQd9",
+                "did:web:api.service.example",
+                List.of("ES256"),
+                ManagedAgentStatus.ACTIVE,
+                "2026-07-06T12:00:00Z");
+
+        assertTrue(AepValidation.platformAgentIdentityListResponse(
+                        new PlatformAgentIdentityListResponse("1", List.of(identity), "999999999999999999999999"))
+                .isEmpty());
+        assertEquals(
+                "$.count",
+                AepValidation.platformAgentIdentityListResponse(
+                                new PlatformAgentIdentityListResponse("0", List.of(identity), "1"))
+                        .get(0)
+                        .path());
+        assertEquals(
+                "$.total",
+                AepValidation.platformAgentIdentityListResponse(
+                                new PlatformAgentIdentityListResponse("1", List.of(identity), "0"))
+                        .get(0)
+                        .path());
+    }
+
     private static PlatformDiscoveryDocument discovery() {
         return new PlatformDiscoveryDocument(
                 "1.0",

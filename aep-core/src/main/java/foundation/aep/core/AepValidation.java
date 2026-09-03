@@ -359,8 +359,8 @@ public final class AepValidation {
     public static List<ValidationIssue> platformAgentIdentityListResponse(PlatformAgentIdentityListResponse value) {
         Issues issues = new Issues();
         if (value == null) return issues.required("$", JSON_OBJECT).values();
-        nonNegativeIntegerString(value.count(), "$.count", issues);
-        nonNegativeIntegerString(value.total(), "$.total", issues);
+        java.math.BigInteger count = nonNegativeIntegerString(value.count(), "$.count", issues);
+        java.math.BigInteger total = nonNegativeIntegerString(value.total(), "$.total", issues);
         if (value.data() == null) {
             issues.required("$.data", "array");
         } else {
@@ -369,9 +369,13 @@ public final class AepValidation {
                         "$.data[" + index + "]",
                         platformAgentIdentity(value.data().get(index)));
             }
-            if (nonNegativeInteger(value.count()) != value.data().size()) {
+            if (count != null
+                    && !count.equals(java.math.BigInteger.valueOf(value.data().size()))) {
                 issues.add("$.count", "Expected count to equal the number of data entries.");
             }
+        }
+        if (count != null && total != null && total.compareTo(count) < 0) {
+            issues.add("$.total", "Expected total not to be less than count.");
         }
         return issues.values();
     }
@@ -794,11 +798,21 @@ public final class AepValidation {
         }
     }
 
-    private static void nonNegativeIntegerString(String value, String path, Issues issues) {
-        int number = nonNegativeInteger(value);
-        if (number < 0 || !Integer.toString(number).equals(value)) {
+    private static java.math.BigInteger nonNegativeIntegerString(String value, String path, Issues issues) {
+        if (value == null) {
             issues.add(path, "Expected a non-negative decimal integer string.");
+            return null;
         }
+        java.math.BigInteger number;
+        try {
+            number = new java.math.BigInteger(value);
+        } catch (NumberFormatException exception) {
+            issues.add(path, "Expected a non-negative decimal integer string.");
+            return null;
+        }
+        if (number.signum() >= 0 && number.toString().equals(value)) return number;
+        issues.add(path, "Expected a non-negative decimal integer string.");
+        return null;
     }
 
     private static int nonNegativeInteger(String value) {

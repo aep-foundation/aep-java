@@ -195,6 +195,7 @@ public final class AepJson {
         Map<String, Object> value = object(json, PLATFORM_AGENT_IDENTITY_LIST);
         AepRawJson.requireMembers(value, PLATFORM_AGENT_IDENTITY_LIST, "count", "data", "total");
         AepRawJson.rejectNullPaths(value, PLATFORM_AGENT_IDENTITY_LIST, "count", "data", "total");
+        AepRawJson.requireStrings(value, PLATFORM_AGENT_IDENTITY_LIST, "count", "total");
         return parse(
                 json,
                 PlatformAgentIdentityListResponse.class,
