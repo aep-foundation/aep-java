@@ -98,6 +98,31 @@ final class AepServiceTest {
     }
 
     @Test
+    void rejectsExpirationBoundaryFromCustomVerifier() {
+        AepService service = AepService.builder(
+                        document(false),
+                        (assertion, context) -> completed(new ClientAssertionClaims(
+                                AGENT_DID,
+                                AGENT_DID,
+                                context.serviceDid(),
+                                context.operation(),
+                                NOW.minusSeconds(60).getEpochSecond(),
+                                NOW.minusSeconds(30).getEpochSecond(),
+                                "expiration-boundary",
+                                null)))
+                .clock(Clock.fixed(NOW, ZoneOffset.UTC))
+                .clockSkew(java.time.Duration.ofSeconds(30))
+                .build();
+
+        ServiceResponse<?> response = service.status(CommandOptions.authenticated("assertion"))
+                .toCompletableFuture()
+                .join();
+
+        assertEquals(401, response.status());
+        assertEquals("not_recognized", response.problem().code());
+    }
+
+    @Test
     void grantsAndRevokesThroughTheAdvertisedHandler() {
         RecordingGrantHandler handler = new RecordingGrantHandler();
         AepService service = serviceBuilder(document(true), EnrollmentPolicy.active())

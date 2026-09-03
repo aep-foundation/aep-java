@@ -336,7 +336,7 @@ public final class AepService {
         try {
             Instant issued = Instant.ofEpochSecond(claims.issuedAt());
             Instant expires = Instant.ofEpochSecond(claims.expiresAt());
-            return !issued.isAfter(now.plus(clockSkew)) && !expires.isBefore(now.minus(clockSkew));
+            return !issued.isAfter(now.plus(clockSkew)) && expires.isAfter(now.minus(clockSkew));
         } catch (RuntimeException exception) {
             return false;
         }
