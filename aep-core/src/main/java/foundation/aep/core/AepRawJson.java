@@ -24,6 +24,7 @@ final class AepRawJson {
                 "person.username");
         requireStrings(
                 value,
+                CLAIM_VALUES,
                 "contact.email",
                 "contact.mobile",
                 "person.birthdate",
@@ -140,11 +141,11 @@ final class AepRawJson {
         }
     }
 
-    private static void requireStrings(Map<String, Object> value, String... members) {
+    static void requireStrings(Map<String, Object> value, String documentType, String... members) {
         for (String member : members) {
             if (value.containsKey(member) && !(value.get(member) instanceof String)) {
                 throw new AepValidationException(
-                        CLAIM_VALUES, List.of(new ValidationIssue("$." + member, "Expected a string.")));
+                        documentType, List.of(new ValidationIssue("$." + member, "Expected a string.")));
             }
         }
     }

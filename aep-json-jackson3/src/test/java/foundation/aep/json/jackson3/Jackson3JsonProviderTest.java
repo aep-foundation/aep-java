@@ -98,6 +98,16 @@ final class Jackson3JsonProviderTest {
     }
 
     @Test
+    void rejectsNumericPlatformPaginationFields() {
+        assertThrows(
+                AepValidationException.class,
+                () -> AepJson.parsePlatformAgentIdentityListResponse("{\"count\":0,\"data\":[],\"total\":\"0\"}"));
+        assertThrows(
+                AepValidationException.class,
+                () -> AepJson.parsePlatformAgentIdentityListResponse("{\"count\":\"0\",\"data\":[],\"total\":0}"));
+    }
+
+    @Test
     void parsesEveryCoreWireDocument() {
         assertEquals(
                 "did:web:agent.example",
