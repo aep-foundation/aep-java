@@ -142,8 +142,10 @@ public final class NodeInteroperability {
         int port = Integer.parseInt(listen.substring(separator + 1));
         String encodedHost = listen.replace(":", "%3A");
         String serviceDid = "did:web:" + encodedHost + ":services:store";
+        String platformServiceDid = System.getenv("AEP_INTEROP_SERVICE_DID");
+        if (platformServiceDid == null || platformServiceDid.isBlank()) platformServiceDid = serviceDid;
         InteroperabilityKeyStore keys = new InteroperabilityKeyStore();
-        AepPlatform platform = platform(listen, serviceDid, keys);
+        AepPlatform platform = platform(listen, platformServiceDid, keys);
         AepServiceHttpHandler service = service(serviceDid);
         HttpServer server = HttpServer.create(new InetSocketAddress(host, port), 0);
         server.setExecutor(Executors.newFixedThreadPool(SERVER_THREADS));
