@@ -5,6 +5,8 @@ import com.nimbusds.jose.jwk.Curve;
 import com.nimbusds.jose.jwk.ECKey;
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.gen.ECKeyGenerator;
+import com.nimbusds.jose.util.JSONObjectUtils;
+import com.nimbusds.jwt.SignedJWT;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import foundation.aep.agent.AepAgent;
@@ -16,6 +18,7 @@ import foundation.aep.core.AepJson;
 import foundation.aep.core.ClaimValues;
 import foundation.aep.core.ClientAssertionClaims;
 import foundation.aep.core.ClientAssertions;
+import foundation.aep.core.DidWeb;
 import foundation.aep.core.GrantResponses;
 import foundation.aep.core.InspectDocument;
 import foundation.aep.core.ManagedAgentStatus;
@@ -41,6 +44,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URLDecoder;
+import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
@@ -52,6 +56,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executors;
 
 public final class NodeInteroperability {
     private static final String API_KEY_HEADER = "X-API-Key";
@@ -59,9 +64,12 @@ public final class NodeInteroperability {
     private static final String COMMAND_SERVER = "server";
     private static final String HTTP_GET = "GET";
     private static final String HTTP_POST = "POST";
+    private static final int HTTP_OK = 200;
     private static final String PLATFORM_AUTHORIZATION = "Bearer demo-agent";
     private static final String PLATFORM_IDENTITIES = "/platform/agent-identities";
     private static final int MAXIMUM_BODY_BYTES = 65_536;
+    private static final int SERVER_THREADS = 4;
+    private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
 
     private NodeInteroperability() {}
 
@@ -136,8 +144,9 @@ public final class NodeInteroperability {
         String serviceDid = "did:web:" + encodedHost + ":services:store";
         InteroperabilityKeyStore keys = new InteroperabilityKeyStore();
         AepPlatform platform = platform(listen, serviceDid, keys);
-        AepServiceHttpHandler service = service(serviceDid, keys);
+        AepServiceHttpHandler service = service(serviceDid);
         HttpServer server = HttpServer.create(new InetSocketAddress(host, port), 0);
+        server.setExecutor(Executors.newFixedThreadPool(SERVER_THREADS));
         AepHttpServer.register(server, service);
         URI origin = URI.create("http://" + listen);
         server.createContext(
@@ -165,7 +174,7 @@ public final class NodeInteroperability {
         new java.util.concurrent.CountDownLatch(1).await();
     }
 
-    private static AepServiceHttpHandler service(String serviceDid, InteroperabilityKeyStore keys) {
+    private static AepServiceHttpHandler service(String serviceDid) {
         InspectDocument.GrantTypeConfig apiKeyConfig = new InspectDocument.GrantTypeConfig(
                 null,
                 "3600",
@@ -202,11 +211,62 @@ public final class NodeInteroperability {
         AepService protocol = AepService.builder(
                         document,
                         ClientAssertionVerifier.withKeyResolver(
-                                (assertion, claims, context) -> keys.publicKey(claims.issuer())))
+                                (assertion, claims, context) -> resolveAgentKey(assertion, claims.issuer())))
                 .allowInsecureLoopback(true)
                 .storedCredentialGrantType(apiKey)
                 .build();
         return new AepServiceHttpHandler(protocol);
+    }
+
+    private static CompletionStage<JWK> resolveAgentKey(String assertion, String agentDid) {
+        URI documentUri;
+        try {
+            documentUri = DidWeb.documentUri(agentDid, true);
+        } catch (IllegalArgumentException exception) {
+            return CompletableFuture.failedFuture(exception);
+        }
+        HttpRequest request = HttpRequest.newBuilder(documentUri)
+                .header("Accept", Aep.DID_MEDIA_TYPE)
+                .GET()
+                .build();
+        return HTTP_CLIENT
+                .sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                .thenApply(response -> {
+                    if (response.statusCode() != HTTP_OK) {
+                        throw new IllegalArgumentException(
+                                "Agent DID document returned HTTP " + response.statusCode() + ".");
+                    }
+                    try {
+                        Map<String, Object> document = JSONObjectUtils.parse(response.body());
+                        if (!agentDid.equals(document.get("id"))) {
+                            throw new IllegalArgumentException("Agent DID document identifier does not match.");
+                        }
+                        String keyId = SignedJWT.parse(assertion).getHeader().getKeyID();
+                        if (keyId == null || keyId.isBlank()) {
+                            throw new IllegalArgumentException(
+                                    "Agent assertion does not identify a verification method.");
+                        }
+                        int fragment = keyId.indexOf('#');
+                        String keyDid = fragment < 0 ? keyId : keyId.substring(0, fragment);
+                        if (!agentDid.equals(keyDid)) {
+                            throw new IllegalArgumentException(
+                                    "Agent verification method does not identify the assertion issuer.");
+                        }
+                        Map<String, Object>[] methods =
+                                JSONObjectUtils.getJSONObjectArray(document, "verificationMethod");
+                        if (methods == null) {
+                            throw new IllegalArgumentException("Agent DID document has no verification methods.");
+                        }
+                        for (Map<String, Object> method : methods) {
+                            if (keyId.equals(method.get("id"))) {
+                                return JWK.parse(JSONObjectUtils.getJSONObject(method, "publicKeyJwk"));
+                            }
+                        }
+                        throw new IllegalArgumentException("Agent verification method was not found.");
+                    } catch (java.text.ParseException exception) {
+                        throw new IllegalArgumentException("Agent DID document is invalid.", exception);
+                    }
+                });
     }
 
     private static AepPlatform platform(String host, String serviceDid, InteroperabilityKeyStore keys) {
