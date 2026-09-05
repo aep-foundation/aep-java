@@ -39,7 +39,7 @@ Import `aep-bom` once to keep every AEP module on a compatible version:
     <dependency>
       <groupId>foundation.aep</groupId>
       <artifactId>aep-bom</artifactId>
-      <version>0.1.0</version>
+      <version>0.1.1</version>
       <type>pom</type>
       <scope>import</scope>
     </dependency>
@@ -61,7 +61,7 @@ Import `aep-bom` once to keep every AEP module on a compatible version:
 Gradle can import the same BOM as a platform:
 
 ```kotlin
-implementation(platform("foundation.aep:aep-bom:0.1.0"))
+implementation(platform("foundation.aep:aep-bom:0.1.1"))
 implementation("foundation.aep:aep-agent")
 implementation("foundation.aep:aep-json-jackson2")
 ```
@@ -73,7 +73,7 @@ on each AEP dependency directly:
 <dependency>
   <groupId>foundation.aep</groupId>
   <artifactId>aep-agent</artifactId>
-  <version>0.1.0</version>
+  <version>0.1.1</version>
 </dependency>
 ```
 
