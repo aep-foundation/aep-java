@@ -5,6 +5,7 @@ updates:
     schedule:
       interval: weekly
     ignore:
+      - dependency-name: jakarta.servlet:jakarta.servlet-api
       - dependency-name: org.springframework:*
         update-types:
           - version-update:semver-major
