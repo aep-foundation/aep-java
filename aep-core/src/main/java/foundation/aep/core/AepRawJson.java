@@ -11,7 +11,7 @@ final class AepRawJson {
 
     private AepRawJson() {}
 
-    static void claimValues(Map<String, Object> value) {
+    static void claimValues(Map<?, ?> value) {
         rejectNullPaths(
                 value,
                 CLAIM_VALUES,
@@ -123,7 +123,7 @@ final class AepRawJson {
         }
     }
 
-    static void rejectNullPaths(Map<String, Object> value, String documentType, String... members) {
+    static void rejectNullPaths(Map<?, ?> value, String documentType, String... members) {
         for (String member : members) {
             if (value.containsKey(member) && value.get(member) == null) {
                 throw new AepValidationException(
@@ -141,7 +141,7 @@ final class AepRawJson {
         }
     }
 
-    static void requireStrings(Map<String, Object> value, String documentType, String... members) {
+    static void requireStrings(Map<?, ?> value, String documentType, String... members) {
         for (String member : members) {
             if (value.containsKey(member) && !(value.get(member) instanceof String)) {
                 throw new AepValidationException(

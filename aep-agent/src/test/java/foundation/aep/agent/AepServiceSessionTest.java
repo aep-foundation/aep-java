@@ -70,6 +70,82 @@ class AepServiceSessionTest {
     }
 
     @Test
+    void inspectPreservesNoCacheAcrossNotModifiedResponses() {
+        QueueTransport transport = new QueueTransport(
+                response(
+                        200,
+                        Map.of(
+                                "Content-Type",
+                                List.of(Aep.MEDIA_TYPE),
+                                "Cache-Control",
+                                List.of("no-cache"),
+                                "ETag",
+                                List.of("v1")),
+                        document(List.of("inspect"), List.of(), List.of())),
+                response(304, Map.of(), ""),
+                response(304, Map.of("Cache-Control", List.of("max-age=60")), ""));
+        AepServiceSession session =
+                agent(transport, request -> failedTransport()).build().service(ORIGIN);
+        session.inspect().join();
+        session.inspect().join();
+        session.inspect().join();
+        session.inspect().join();
+        assertEquals(3, transport.requests.size());
+        assertEquals(List.of("v1"), transport.requests.get(2).headers().get("If-None-Match"));
+    }
+
+    @Test
+    void inspectDoesNotReuseResponsesWhoseAgeOrExpiresHasConsumedFreshness() {
+        for (Map<String, List<String>> policy : List.of(
+                Map.of("Cache-Control", List.of("max-age=60"), "Age", List.of("120")),
+                Map.of("Expires", List.of("Tue, 1 Sep 2026 00:00:00 GMT")))) {
+            Map<String, List<String>> headers = new java.util.LinkedHashMap<>(policy);
+            headers.put("Content-Type", List.of(Aep.MEDIA_TYPE));
+            QueueTransport transport = new QueueTransport(
+                    response(200, headers, document(List.of("inspect"), List.of(), List.of())),
+                    aepResponse(200, document(List.of("inspect"), List.of(), List.of())));
+            AepServiceSession session =
+                    agent(transport, request -> failedTransport()).build().service(ORIGIN);
+            session.inspect().join();
+            session.inspect().join();
+            assertEquals(2, transport.requests.size());
+        }
+    }
+
+    @Test
+    void inspectRejectsMalformedParametersAndAcceptsValidQuotedParameters() {
+        for (String media : List.of(
+                "application/aep+json; garbage",
+                "application/aep+json; charset=",
+                "application/aep+json; charset=\"unterminated",
+                "application/aep+json; x=one two")) {
+            QueueTransport transport = new QueueTransport(response(
+                    200, Map.of("Content-Type", List.of(media)), document(List.of("inspect"), List.of(), List.of())));
+            assertEquals(
+                    "invalid_media_type",
+                    agentError(agent(transport, request -> failedTransport())
+                                    .build()
+                                    .service(ORIGIN)
+                                    .inspect())
+                            .code());
+        }
+        QueueTransport transport = new QueueTransport(response(
+                200,
+                Map.of("Content-Type", List.of("Application/AEP+JSON; charset=utf-8; note=\"one; two\"")),
+                document(List.of("inspect"), List.of(), List.of())));
+        assertEquals(
+                SERVICE_DID,
+                agent(transport, request -> failedTransport())
+                        .build()
+                        .service(ORIGIN)
+                        .inspect()
+                        .join()
+                        .document()
+                        .service()
+                        .did());
+    }
+
+    @Test
     void enrollRejectsMissingRequiredClaimsBeforeCommandRequest() {
         QueueTransport inspect = new QueueTransport(
                 aepResponse(200, document(List.of("enroll", "inspect"), List.of(), List.of("contact.email"))));
@@ -213,7 +289,7 @@ class AepServiceSessionTest {
 
         store.deleteGrantType(SERVICE_DID, "custom-grant").toCompletableFuture().join();
 
-        assertTrue(store.find(SERVICE_DID, "custom-grant")
+        assertTrue(store.find(SERVICE_DID, "custom-grant", NOW)
                 .toCompletableFuture()
                 .join()
                 .isEmpty());
@@ -268,6 +344,27 @@ class AepServiceSessionTest {
                 URI.create("https://service.example/metadata/aep"),
                 inspect.requests.get(0).uri());
         assertEquals(List.of("etag-1"), inspect.requests.get(0).headers().get("If-None-Match"));
+    }
+
+    @Test
+    void notModifiedNoStoreEvictsTheCachedDocumentAndItsValidators() {
+        String json = document(List.of("inspect"), List.of(), List.of());
+        MemoryInspectCache cache = new MemoryInspectCache();
+        cache.entry = Optional.of(new AgentInspectCache.Entry(
+                ORIGIN.resolve("/.well-known/aep"), json, "etag-1", null, NOW.minusSeconds(1)));
+        QueueTransport inspect = new QueueTransport(
+                response(304, Map.of("Cache-Control", List.of("no-store")), ""), aepResponse(200, json));
+        AepServiceSession session = agent(inspect, request -> failedTransport())
+                .inspectCache(cache)
+                .build()
+                .service(ORIGIN);
+
+        assertEquals(SERVICE_DID, session.inspect().join().document().service().did());
+        assertTrue(cache.entry.isEmpty());
+        assertEquals(SERVICE_DID, session.inspect().join().document().service().did());
+        assertEquals(2, inspect.requests.size());
+        assertEquals(List.of("etag-1"), inspect.requests.get(0).headers().get("If-None-Match"));
+        assertFalse(inspect.requests.get(1).headers().containsKey("If-None-Match"));
     }
 
     @Test
@@ -439,7 +536,7 @@ class AepServiceSessionTest {
         private Optional<AgentCredential> credential = Optional.empty();
 
         @Override
-        public CompletableFuture<Optional<AgentCredential>> find(String serviceDid, String grantType) {
+        public CompletableFuture<Optional<AgentCredential>> find(String serviceDid, String grantType, Instant now) {
             return CompletableFuture.completedFuture(
                     credential.filter(value -> value.grantType().equals(grantType)));
         }

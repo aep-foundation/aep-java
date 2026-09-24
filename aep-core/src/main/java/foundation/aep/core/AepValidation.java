@@ -27,6 +27,7 @@ public final class AepValidation {
     private static final Set<String> AUTHENTICATED_COMMANDS = Set.of("enroll", "grant", "revoke", "status");
     private static final String COMMANDS_SUPPORTED_PATH = "$.commands.supported";
     private static final String AGENT_DID_PATH = "$.agent_did";
+    private static final String OPENAPI_URL_PATH = "$.http.openapi.url";
     private static final String OPERATION_PATH = "$.op";
     private static final String OPERATION_REQUIRED = "Expected a registered assertion operation.";
     private static final String RESOURCE_PATH = "$.resource";
@@ -669,14 +670,18 @@ public final class AepValidation {
             issues.required("$.http", JSON_OBJECT);
             return;
         }
-        if (value.endpointBase() != null && !value.endpointBase().startsWith("/")) {
-            issues.add("$.http.endpoint_base", "Expected a path beginning with '/'.");
+        // An endpoint_base is origin-relative, so a protocol-relative "//host" value would move
+        // every command URL to another origin once it is resolved against the Service origin.
+        if (value.endpointBase() != null && !isEndpointPath(value.endpointBase())) {
+            issues.add("$.http.endpoint_base", "Expected an absolute path without a query or fragment.");
         }
         if (value.openapi() != null) {
-            requiredNonEmpty(value.openapi().url(), "$.http.openapi.url", issues);
+            requiredNonEmpty(value.openapi().url(), OPENAPI_URL_PATH, issues);
             if (nonEmpty(value.openapi().url())
                     && !isUriReference(value.openapi().url())) {
-                issues.add("$.http.openapi.url", "Expected a URI reference.");
+                issues.add(OPENAPI_URL_PATH, "Expected a URI reference.");
+            } else if (nonEmpty(value.openapi().url())) {
+                openApiUrlTransport(value.openapi().url(), issues);
             }
             String slash = value.openapi().pathMatching() == null
                     ? null
@@ -684,6 +689,32 @@ public final class AepValidation {
             if (!"strict".equals(slash) && !"equivalent".equals(slash)) {
                 issues.add("$.http.openapi.path_matching.trailing_slash", "Expected strict or equivalent.");
             }
+        }
+    }
+
+    /**
+     * Applies CORE-OAS-003 and CORE-OAS-004 to an absolute OpenAPI URL. A relative reference
+     * resolves against the final Inspect response URL and inherits its transport, so only an
+     * absolute reference carries a transport of its own to check here.
+     */
+    private static void openApiUrlTransport(String value, Issues issues) {
+        URI uri;
+        try {
+            uri = URI.create(value);
+        } catch (IllegalArgumentException exception) {
+            return;
+        }
+        if (!uri.isAbsolute()) {
+            return;
+        }
+        if (uri.getRawUserInfo() != null) {
+            issues.add(OPENAPI_URL_PATH, "Expected no user information.");
+        }
+        if (HTTPS.equalsIgnoreCase(uri.getScheme())) {
+            return;
+        }
+        if (!"http".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null || !isLoopbackHost(uri.getHost())) {
+            issues.add(OPENAPI_URL_PATH, "Expected HTTPS, or HTTP for a loopback literal.");
         }
     }
 
@@ -920,6 +951,18 @@ public final class AepValidation {
         return value != null && !value.isEmpty();
     }
 
+    /**
+     * Reports whether a host is one of the three loopback literals the development opt-in permits.
+     * {@link URI#getHost()} keeps the brackets around an IPv6 literal, so the bracketed spelling is
+     * the one a parsed URI actually presents.
+     */
+    private static boolean isLoopbackHost(String host) {
+        String normalized = host.toLowerCase(java.util.Locale.ROOT);
+        return "localhost".equals(normalized)
+                || "127.0.0.1".equals(normalized) // NOPMD - Explicit development opt-in permits loopback HTTP.
+                || "[::1]".equals(normalized);
+    }
+
     private static boolean isApiKeyValue(String value) {
         for (int index = 0; index < value.length(); index++) {
             char character = value.charAt(index);
@@ -1049,7 +1092,8 @@ public final class AepValidation {
         }
         String tag = content.substring(0, separator);
         String literal = content.substring(separator + 1);
-        return tag.matches("[A-Za-z0-9-]*[A-Za-z0-9]")
+        // RFC 5321 spells the standardized tag as an Ldh-str, which begins with a letter or digit.
+        return tag.matches("[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?")
                 && literal.chars()
                         .allMatch(character ->
                                 (character >= 33 && character <= 90) || (character >= 94 && character <= 126));
@@ -1114,19 +1158,19 @@ public final class AepValidation {
         }
         try {
             URI uri = URI.create(value);
-            if (!uri.isAbsolute() || uri.getHost() == null || uri.getFragment() != null) {
+            // An authenticate assertion names one target, so user information has no place in it:
+            // credentials in the resource claim would travel wherever the claim does, and the
+            // request target a Service compares against never carries them.
+            if (!uri.isAbsolute()
+                    || uri.getHost() == null
+                    || uri.getRawUserInfo() != null
+                    || uri.getFragment() != null) {
                 return false;
             }
             if (HTTPS.equalsIgnoreCase(uri.getScheme())) {
                 return true;
             }
-            return allowInsecureLoopback
-                    && "http".equalsIgnoreCase(uri.getScheme())
-                    && Set.of(
-                                    "localhost",
-                                    "127.0.0.1", // NOPMD - Explicit development opt-in permits loopback HTTP.
-                                    "::1") // NOPMD - Explicit development opt-in permits loopback HTTP.
-                            .contains(uri.getHost().toLowerCase(java.util.Locale.ROOT));
+            return allowInsecureLoopback && "http".equalsIgnoreCase(uri.getScheme()) && isLoopbackHost(uri.getHost());
         } catch (IllegalArgumentException exception) {
             return false;
         }

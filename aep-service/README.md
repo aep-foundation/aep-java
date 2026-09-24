@@ -41,6 +41,31 @@ The default stores are process-local and intended for development. Production Se
 provide durable `EnrollmentStore` and `IdempotencyStore` implementations and a replay store whose
 consume operation is atomic across every Service instance.
 
+### Use a trusted Platform for verification
+
+`HostedPlatformClientAssertionVerifier` sends assertions to a Platform with which your Service has
+an established trust relationship. Configure the endpoint yourself; do not derive it from an
+unverified assertion.
+
+```java
+ClientAssertionVerifier assertionVerifier = HostedPlatformClientAssertionVerifier
+    .builder(URI.create("https://platform.example/v1/aep/verifications"), transport)
+    .authorization("Bearer service-credential")
+    .build();
+```
+
+The `transport` is an `AepHttpTransport` implementation. It must honor the request timeout and
+return redirects without following them, so Platform credentials cannot be forwarded to another
+endpoint. The verifier requires HTTPS, defaults to a 30-second timeout, and rejects unsuccessful
+or mismatched verification responses. Identical requests reuse a verification idempotency key;
+a fresh assertion produces a different key. `AepService` also validates the returned claims and
+applies its own replay protection. The timeout bounds the verifier's wait; stopping network work
+is the transport's responsibility.
+
+Hosted verification is optional. Services must retain a local verification path for otherwise valid
+Agent assertions, rather than requiring every Agent to use their trusted Platform. Applications
+supporting both paths can select the appropriate verifier through `ClientAssertionVerifier`.
+
 ## Expose HTTP commands
 
 `AepServiceHttpHandler` provides the shared HTTP boundary used by the JDK HTTP server, Servlet, and
@@ -75,7 +100,12 @@ or adapt `AepServiceHttpHandler`.
 ## Add a credential profile
 
 Use a shared credential store with one stored definition for every built-in Grant Type advertised by
-the Inspect document:
+the Inspect document. This example requires a document that advertises `api-key` in
+`commands.grant_types`, provides its `commands.grant_types_config` entry, and enables the `grant`
+and `revoke` commands. To use that key on protected resources, also advertise `api-key` in
+`authentication.methods`. The command-only document above does not include this configuration;
+see [the runnable example's Inspect document](../examples/src/main/java/foundation/aep/examples/AgentServiceExample.java)
+for the complete setup.
 
 ```java
 ServiceCredentialStore credentialStore = ServiceCredentialStore.inMemory();
@@ -103,7 +133,7 @@ values:
 
 - `required` values must be present before enrollment can succeed;
 - `preferred` values improve the Service experience but do not block enrollment;
-- `optional` values may be supplied without being requested.
+- `optional` values are accepted but are not needed for enrollment.
 
 `AepService` checks required advertised values before invoking the enrollment policy. The policy
 can return additional `requirementsPending` or `verificationPending` values when an application

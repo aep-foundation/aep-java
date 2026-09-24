@@ -12,6 +12,7 @@ import foundation.aep.agent.AepServiceSession;
 import foundation.aep.agent.AgentAuthentication;
 import foundation.aep.agent.AgentIdentity;
 import foundation.aep.core.Aep;
+import foundation.aep.core.AgentStatus;
 import foundation.aep.core.ClaimValues;
 import foundation.aep.core.ClientAssertions;
 import foundation.aep.core.ContactAddressPrimary;
@@ -41,6 +42,7 @@ public final class AgentServiceExample {
     private static final String AGENT_DID = "did:web:agent.example";
     private static final String API_KEY_HEADER = "X-API-Key";
     private static final int HTTP_UNAUTHORIZED = 401;
+    private static final int HTTP_OK = 200;
 
     private AgentServiceExample() {}
 
@@ -93,6 +95,10 @@ public final class AgentServiceExample {
             System.out.println("Inspected " + inspection.document().service().did()); // NOPMD - Example output.
 
             var enrollment = session.enroll(claims()).join();
+            if (enrollment.status() != AgentStatus.ACTIVE
+                    || session.status().join().status() != AgentStatus.ACTIVE) {
+                throw new IllegalStateException("The example Agent did not become active.");
+            }
             System.out.println("Enrollment status: " + enrollment.status().value()); // NOPMD - Example output.
 
             var grant = session.grant(Aep.GRANT_TYPE_API_KEY, List.of("profile:read"))
@@ -102,6 +108,9 @@ public final class AgentServiceExample {
 
             AgentAuthentication authentication = session.authenticate(profile).join();
             HttpResponse<String> response = getProfile(transport, profile, authentication);
+            if (response.statusCode() != HTTP_OK || !"AEP-authenticated profile".equals(response.body())) {
+                throw new IllegalStateException("The example protected resource did not authenticate the Agent.");
+            }
             System.out.println( // NOPMD - Example output.
                     "Protected profile: " + response.statusCode() + " " + response.body());
 

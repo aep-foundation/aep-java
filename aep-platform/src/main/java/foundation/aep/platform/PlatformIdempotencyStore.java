@@ -92,9 +92,11 @@ public interface PlatformIdempotencyStore {
             destination.complete(response);
         }
 
+        // PLT-IDP-004 requires the replayable result to survive for at least an hour, so a record
+        // whose age is exactly the retention window is still inside it and has to be kept.
         private synchronized void expire() {
             Instant cutoff = clock.instant().minus(RETENTION);
-            entries.values().removeIf(entry -> !entry.createdAt.isAfter(cutoff));
+            entries.values().removeIf(entry -> entry.createdAt.isBefore(cutoff));
         }
 
         private static boolean sameRequest(PlatformIdempotencyInput first, PlatformIdempotencyInput second) {

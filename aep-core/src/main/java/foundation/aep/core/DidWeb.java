@@ -25,9 +25,14 @@ public final class DidWeb {
         String authority = decode(components[0]);
         URI authorityUri = URI.create("https://" + authority);
         String host = authorityUri.getHost();
+        // The decoded authority is concatenated back into the document URI, so it has to be an
+        // authority and nothing else. Without the round-trip check a value such as
+        // "example.com%3Fx=1" parsed as a host plus a query, passed every individual check, and
+        // produced a document URI whose query swallowed the whole did.json path.
         if (host == null
                 || authorityUri.getUserInfo() != null
-                || !authorityUri.getPath().isEmpty()) {
+                || !authorityUri.getPath().isEmpty()
+                || !authority.equals(authorityUri.getRawAuthority())) {
             throw new IllegalArgumentException("Invalid did:web authority: " + authority);
         }
         List<String> path = new ArrayList<>();
@@ -36,7 +41,7 @@ public final class DidWeb {
             if (component.isEmpty() || component.contains("/") || ".".equals(component) || "..".equals(component)) {
                 throw new IllegalArgumentException("Invalid did:web path component.");
             }
-            path.add(component);
+            path.add(components[index]);
         }
         String documentPath = path.isEmpty() ? "/.well-known/did.json" : "/" + String.join("/", path) + "/did.json";
         String scheme = allowInsecureLoopback && isLoopback(host) ? "http" : "https";
@@ -55,7 +60,11 @@ public final class DidWeb {
 
     private static String decode(String value) {
         try {
-            return URI.create("https://did.invalid/" + value).getPath().substring(1);
+            URI uri = URI.create("https://did.invalid/" + value);
+            if (uri.getRawQuery() != null || uri.getRawFragment() != null) {
+                throw new IllegalArgumentException("Invalid did:web component.");
+            }
+            return uri.getPath().substring(1);
         } catch (IllegalArgumentException exception) {
             throw new IllegalArgumentException("Invalid did:web percent encoding.", exception);
         }

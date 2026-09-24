@@ -58,7 +58,7 @@ final class AgentCredentialHandlersTest {
                 () -> store.save(replacement).toCompletableFuture().join());
         assertEquals(
                 first,
-                store.find(SERVICE_DID, Aep.GRANT_TYPE_API_KEY)
+                store.find(SERVICE_DID, Aep.GRANT_TYPE_API_KEY, Instant.parse("2026-09-01T00:00:00Z"))
                         .toCompletableFuture()
                         .join()
                         .orElseThrow());

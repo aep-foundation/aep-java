@@ -1,7 +1,9 @@
 package foundation.aep.json.jackson3;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import foundation.aep.core.AepJson;
 import foundation.aep.core.AepValidationException;
@@ -11,6 +13,46 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 final class Jackson3JsonProviderTest {
+    @Test
+    void validatesNestedEnrollmentClaimsBeforeConversion() {
+        for (String claims : List.of(
+                "{\"person.first_name\":42}",
+                "{\"person.first_name\":null}",
+                "{\"contact.address.primary\":null}",
+                "{\"contact.address.primary\":{\"first_name\":\"Ada\",\"last_name\":\"Lovelace\",\"line1\":\"1 Main Street\",\"country\":\"GB\",\"postal_code\":\"123\"}}",
+                "{\"contact.address.primary\":{\"first_name\":\"Ada\",\"last_name\":\"Lovelace\",\"line1\":\"1 Main Street\",\"country\":\"GB\",\"line2\":null}}")) {
+            String json = "{\"agent_did\":\"did:web:agent.example\",\"claims\":" + claims + "}";
+            assertThrows(AepValidationException.class, () -> AepJson.parseEnrollRequest(json));
+        }
+        String json = """
+                {"agent_did":"did:web:agent.example","claims":{"person.first_name":"Ada",
+                "custom.claim":null,"contact.address.primary":{"first_name":"Ada","last_name":"Lovelace",
+                "line1":"1 Main Street","country":"GB","line2":""}}}
+                """;
+        var claims = AepJson.parseEnrollRequest(json).claims();
+        assertEquals("Ada", claims.personFirstName());
+        assertEquals("", claims.contactAddressPrimary().line2());
+        assertTrue(claims.additional().containsKey("custom.claim"));
+        assertNull(claims.additional().get("custom.claim"));
+    }
+
+    @Test
+    void rejectsCoercionAndTrailingJson() {
+        String valid = """
+                {"jti":"request-1","op":"status","service_did":"did:web:service.example","lifetime_seconds":"60"}
+                """;
+        assertEquals("60", AepJson.parsePlatformSignRequest(valid).lifetimeSeconds());
+        for (String value : List.of("60", "60.0", "true")) {
+            assertThrows(
+                    AepValidationException.class,
+                    () -> AepJson.parsePlatformSignRequest(valid.replace("\"60\"", value)));
+        }
+        for (String suffix : List.of(" garbage", " {}", " null")) {
+            assertThrows(AepValidationException.class, () -> AepJson.parsePlatformSignRequest(valid + suffix));
+        }
+        assertEquals("60", AepJson.parsePlatformSignRequest(valid + " \n\t").lifetimeSeconds());
+    }
+
     @Test
     void parsesAndWritesInspectDocument() {
         String json = """
@@ -44,6 +86,46 @@ final class Jackson3JsonProviderTest {
                 "1.0",
                 AepJson.parseInspectDocument(AepJson.write(AepJson.parseInspectDocument(json)))
                         .version());
+    }
+
+    @Test
+    void validatesOpenApiObjectsAndUriReferencesWithoutRejectingTopLevelExtensions() {
+        String template = """
+                {"aep_version":"1.0","bindings":{"supported":["http"]},
+                 "commands":{"supported":["inspect"]},"core":{"signing_algorithms":["EdDSA","ES256"]},
+                 "http":{"endpoint_base":"/aep","openapi":%s},
+                 "identity":{"methods":["did:web"]},"service":{"did":"did:web:service.example"},
+                 "example.extension":{"enabled":true}}
+                """;
+        String valid = """
+                {"url":"/openapi.json","path_matching":{"trailing_slash":"strict"}}
+                """;
+        assertEquals(
+                "strict",
+                AepJson.parseInspectDocument(template.formatted(valid))
+                        .http()
+                        .openapi()
+                        .pathMatching()
+                        .trailingSlash());
+        String document = template.formatted(valid);
+        assertThrows(
+                AepValidationException.class,
+                () -> AepJson.parseInspectDocument(document.replace("/aep", "/bad path")));
+        assertThrows(
+                AepValidationException.class,
+                () -> AepJson.parseInspectDocument(document.replace(
+                        "\"example.extension\":",
+                        "\"extensions\":{\"supported\":[\"not a URI\"]},\"example.extension\":")));
+        for (String openapi : List.of(
+                "{\"url\":null,\"path_matching\":{\"trailing_slash\":\"strict\"}}",
+                "{\"url\":\"/openapi.json\",\"future\":true,\"path_matching\":{\"trailing_slash\":\"strict\"}}",
+                "{\"url\":\"/openapi.json\",\"path_matching\":{\"trailing_slash\":null}}",
+                "{\"url\":\"/openapi.json\",\"path_matching\":{\"trailing_slash\":\"strict\",\"future\":true}}")) {
+            assertThrows(
+                    AepValidationException.class,
+                    () -> AepJson.parseInspectDocument(template.formatted(openapi)),
+                    openapi);
+        }
     }
 
     @Test
@@ -209,5 +291,55 @@ final class Jackson3JsonProviderTest {
                 AepValidationException.class,
                 () -> AepJson.parsePlatformProvisionRequest(
                         "{\"service_did\":\"did:web:service.example\",\"extra\":true}"));
+    }
+
+    @Test
+    void parsesProvisioningAndLifecycleWithoutAcceptingUnknownMembers() {
+        assertEquals(
+                "did:web:service.example",
+                AepJson.parsePlatformProvisionRequest("{\"service_did\":\"did:web:service.example\"}")
+                        .serviceDid());
+        for (String status : List.of("active", "revoked", "suspended", "terminated")) {
+            assertEquals(
+                    status,
+                    AepJson.parsePlatformLifecycleRequest("{\"status\":\"" + status + "\"}")
+                            .status()
+                            .value());
+        }
+        for (String json : List.of(
+                "{}", "{\"status\":null}", "{\"status\":\"pending\"}", "{\"status\":\"active\",\"extra\":true}")) {
+            assertThrows(AepValidationException.class, () -> AepJson.parsePlatformLifecycleRequest(json), json);
+        }
+        assertThrows(AepValidationException.class, () -> AepJson.parsePlatformSignResponse("{\"status\":\"unknown\"}"));
+    }
+
+    @Test
+    void serializesStatusWithoutEmptyLifecycleMetadata() {
+        var status = new foundation.aep.core.StatusResponse(
+                foundation.aep.core.AgentStatus.ACTIVE, "false", List.of(), List.of(), null);
+        assertEquals("{\"status\":\"active\"}", AepJson.write(status));
+        var pending = new foundation.aep.core.StatusResponse(
+                foundation.aep.core.AgentStatus.PENDING,
+                "true",
+                List.of("contact.email"),
+                List.of("contact.mobile"),
+                null);
+        assertEquals(pending, AepJson.parseStatusResponse(AepJson.write(pending)));
+        AepJson.requireObject("{}", "example");
+        assertThrows(AepValidationException.class, () -> AepJson.requireObject("[]", "example"));
+    }
+
+    @Test
+    void rejectsAddressTypeCoercion() {
+        for (String address : List.of(
+                "42",
+                "[]",
+                "\"address\"",
+                "{\"country\":\"US\",\"first_name\":\"Ada\",\"last_name\":\"Lovelace\",\"line1\":42}")) {
+            assertThrows(
+                    AepValidationException.class,
+                    () -> AepJson.parseClaimValues("{\"contact.address.primary\":" + address + "}"),
+                    address);
+        }
     }
 }

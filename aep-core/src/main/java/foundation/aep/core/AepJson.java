@@ -68,6 +68,9 @@ public final class AepJson {
         Map<String, Object> value = object(json, ENROLL_REQUEST);
         AepRawJson.requireMembers(value, ENROLL_REQUEST, AGENT_DID);
         AepRawJson.rejectNullPaths(value, ENROLL_REQUEST, AGENT_DID, "claims", "idempotency_key");
+        if (value.get("claims") instanceof Map<?, ?> claims) {
+            AepRawJson.claimValues(claims);
+        }
         return parse(json, EnrollRequest.class, ENROLL_REQUEST, AepValidation::enrollRequest);
     }
 

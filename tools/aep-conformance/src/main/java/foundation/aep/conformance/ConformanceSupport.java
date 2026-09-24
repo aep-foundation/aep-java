@@ -64,6 +64,35 @@ final class ConformanceSupport {
         return json(AepJson.write(value)).equals(expected);
     }
 
+    /**
+     * Checks that writing a parsed value back out preserves everything the vector published.
+     *
+     * Straight equality fails on members the SDK materialises as canonical empty defaults, such as
+     * an absent {@code requested_scopes} becoming {@code []}. Every member the vector does publish
+     * must survive unchanged, and a member the round-trip added is only tolerated when it is an
+     * empty array or object; anything dropped, renamed, or altered fails.
+     */
+    static boolean preserves(Object value, JsonNode source) {
+        return preserved(json(AepJson.write(value)), source);
+    }
+
+    private static boolean preserved(JsonNode written, JsonNode source) {
+        if (!source.isObject()) return written.equals(source);
+        if (!written.isObject()) return false;
+        var names = source.fieldNames();
+        while (names.hasNext()) {
+            String name = names.next();
+            if (!written.has(name) || !preserved(written.get(name), source.get(name))) return false;
+        }
+        var added = written.fields();
+        while (added.hasNext()) {
+            var entry = added.next();
+            if (source.has(entry.getKey())) continue;
+            if (!entry.getValue().isContainerNode() || !entry.getValue().isEmpty()) return false;
+        }
+        return true;
+    }
+
     static IllegalArgumentException unmapped(AdapterRequest request) {
         return new IllegalArgumentException("No " + request.role() + " operation maps vector "
                 + request.vector().category() + "/" + request.vector().id());

@@ -1,10 +1,12 @@
 package foundation.aep.platform;
 
+import com.nimbusds.jwt.SignedJWT;
 import foundation.aep.core.Aep;
 import foundation.aep.core.AepValidation;
 import foundation.aep.core.ClientAssertionClaims;
 import foundation.aep.core.ClientAssertionVerification;
 import foundation.aep.core.ClientAssertions;
+import foundation.aep.core.DidWeb;
 import foundation.aep.core.ManagedAgentStatus;
 import foundation.aep.core.PlatformAgentIdentity;
 import foundation.aep.core.PlatformAgentIdentityListResponse;
@@ -22,15 +24,19 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.text.ParseException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -46,6 +52,10 @@ public final class AepPlatform {
     private static final String IDENTITY_NOT_RECOGNIZED = "Identity not recognized.";
     private static final String INVALID_REQUEST = "invalid_request";
     private static final String NOT_RECOGNIZED = "not_recognized";
+    private static final String DID_URL_PROBE = "aep-platform-did-url-probe";
+    private static final DateTimeFormatter HTTP_DATE = DateTimeFormatter.ofPattern(
+                    "EEE, dd MMM yyyy HH:mm:ss 'GMT'", Locale.ROOT)
+            .withZone(ZoneOffset.UTC);
     private final PlatformDiscoveryDocument platformDiscovery;
     private final String didHost;
     private final String didPathPrefix;
@@ -62,6 +72,8 @@ public final class AepPlatform {
     private final Duration maximumLifetime;
     private final Supplier<String> identityIdSupplier;
     private final Supplier<String> agentDidIdSupplier;
+    private final String discoveryETag;
+    private final String discoveryModified;
 
     private AepPlatform(Builder builder) {
         platformDiscovery = AepValidation.requirePlatformDiscoveryDocument(builder.configuredDiscovery);
@@ -93,8 +105,9 @@ public final class AepPlatform {
             throw new IllegalArgumentException(
                     "Hosted verification capability and endpoint must be configured together.");
         }
-        renderDidDocumentUrl("validation");
-        createServiceScopedAgentDid("validation");
+        validateDidUrlTemplate();
+        discoveryETag = entityTag(platformDiscovery);
+        discoveryModified = HTTP_DATE.format(clock.instant());
     }
 
     public static Builder builder(
@@ -107,7 +120,14 @@ public final class AepPlatform {
     }
 
     public PlatformResponse<PlatformDiscoveryDocument> discovery() {
-        return success(200, platformDiscovery, Aep.MEDIA_TYPE, Map.of("Cache-Control", List.of("max-age=300")));
+        // PLT-DISC-012 asks for validators alongside the freshness lifetime, and PLT-DISC-013 makes
+        // a client honour them. Sending only Cache-Control left every expiry as a full refetch,
+        // because the client had nothing to put in an If-None-Match or If-Modified-Since request.
+        Map<String, List<String>> headers = new LinkedHashMap<>();
+        headers.put("Cache-Control", List.of("max-age=300"));
+        headers.put("ETag", List.of(discoveryETag));
+        headers.put("Last-Modified", List.of(discoveryModified));
+        return success(200, platformDiscovery, Aep.MEDIA_TYPE, headers);
     }
 
     public CompletionStage<PlatformResponse<PlatformDidDocument>> getDidDocument(
@@ -170,23 +190,27 @@ public final class AepPlatform {
         if (!AepValidation.platformProvisionRequest(request).isEmpty()) {
             return completed(problem(400, INVALID_REQUEST, "service_did must be a DID."));
         }
-        return idempotent(
-                PlatformIdempotentOperation.PROVISION,
-                List.of(request.serviceDid()),
-                effectiveContext,
-                () -> authorizer
-                        .authorize(PlatformAuthorizationRequest.provision(request), effectiveContext)
-                        .thenCompose(authorized -> {
-                            if (!authorized) {
-                                return completed(problem(404, NOT_RECOGNIZED, IDENTITY_NOT_RECOGNIZED));
-                            }
-                            return serviceDidResolver
+        if (!hasIdempotencyContext(effectiveContext)) {
+            return completed(
+                    problem(400, INVALID_REQUEST, "Idempotency-Key and authenticated principal are required."));
+        }
+        return authorizer
+                .authorize(PlatformAuthorizationRequest.provision(request), effectiveContext)
+                .thenCompose(authorized -> {
+                    if (!authorized) {
+                        return completed(problem(404, NOT_RECOGNIZED, IDENTITY_NOT_RECOGNIZED));
+                    }
+                    return idempotent(
+                            PlatformIdempotentOperation.PROVISION,
+                            List.of(request.serviceDid()),
+                            effectiveContext,
+                            () -> serviceDidResolver
                                     .resolve(request.serviceDid(), effectiveContext)
                                     .thenCompose(resolved -> resolved
                                             ? provisionResolved(request.serviceDid(), effectiveContext)
                                             : completed(problem(
-                                                    400, INVALID_REQUEST, "Service DID could not be resolved.")));
-                        }));
+                                                    400, INVALID_REQUEST, "Service DID could not be resolved."))));
+                });
     }
 
     public CompletionStage<PlatformResponse<PlatformSignResponses.Response>> sign(
@@ -204,17 +228,22 @@ public final class AepPlatform {
         if (lifetime.compareTo(maximumLifetime) > 0) {
             return completed(problem(400, INVALID_REQUEST, "lifetime_seconds exceeds the configured maximum."));
         }
-        return idempotent(
-                PlatformIdempotentOperation.SIGN,
-                List.of(agentIdentityId, requestMaterial(request)),
-                effectiveContext,
-                () -> authorizedIdentity(
-                                agentIdentityId,
+        if (!hasIdempotencyContext(effectiveContext)) {
+            return completed(
+                    problem(400, INVALID_REQUEST, "Idempotency-Key and authenticated principal are required."));
+        }
+        return authorizedIdentity(
+                        agentIdentityId,
+                        effectiveContext,
+                        identity -> PlatformAuthorizationRequest.sign(identity, request))
+                .thenCompose(identity -> identity.filter(
+                                value -> value.serviceDid().equals(request.serviceDid()))
+                        .map(value -> idempotent(
+                                PlatformIdempotentOperation.SIGN,
+                                List.of(agentIdentityId, requestMaterial(request)),
                                 effectiveContext,
-                                identity -> PlatformAuthorizationRequest.sign(identity, request))
-                        .thenCompose(identity -> identity.map(
-                                        value -> signAuthorized(value, request, lifetime, effectiveContext))
-                                .orElseGet(() -> completed(problem(404, NOT_RECOGNIZED, IDENTITY_NOT_RECOGNIZED)))));
+                                () -> signAuthorized(value, request, lifetime, effectiveContext)))
+                        .orElseGet(() -> completed(problem(404, NOT_RECOGNIZED, IDENTITY_NOT_RECOGNIZED))));
     }
 
     public CompletionStage<PlatformResponse<PlatformAgentIdentity>> updateIdentity(
@@ -260,22 +289,16 @@ public final class AepPlatform {
         if (!AepValidation.platformVerificationRequest(request).isEmpty()) {
             return completed(problem(400, INVALID_REQUEST, "Hosted verification request is invalid."));
         }
-        return idempotent(
-                PlatformIdempotentOperation.HOSTED_VERIFICATION,
-                listIncludingNulls(
-                        request.clientAssertion(),
-                        request.operation().value(),
-                        request.resource(),
-                        request.serviceDid()),
-                effectiveContext,
-                () -> verifyNew(request, effectiveContext));
+        if (!hasIdempotencyContext(effectiveContext)) {
+            return completed(
+                    problem(400, INVALID_REQUEST, "Idempotency-Key and authenticated principal are required."));
+        }
+        return verifyAuthorized(request, effectiveContext);
     }
 
+    // Provision validates and authorizes the principal before the store scopes the identity to it.
     private CompletionStage<PlatformResponse<PlatformAgentIdentity>> provisionResolved(
             String serviceDid, PlatformRequestContext context) {
-        if (!hasPrincipal(context)) {
-            return completed(problem(400, INVALID_REQUEST, "An authenticated principal is required."));
-        }
         return identityStore
                 .findOrCreate(context.principal(), serviceDid, () -> createIdentity(serviceDid, context))
                 .thenApply(selection -> success(200, publicIdentity(selection.identity())));
@@ -311,7 +334,10 @@ public final class AepPlatform {
             return completed(problem(404, NOT_RECOGNIZED, IDENTITY_NOT_RECOGNIZED));
         }
         return lifecyclePolicy.canSign(identity, context).thenCompose(allowed -> {
-            if (!allowed) {
+            // PLT-LIFE-002 and PLT-SIGN-007 forbid signing for a revoked, suspended, or terminated
+            // identity outright, so the configured policy may only narrow this floor. Consulting the
+            // policy alone let a custom one widen a MUST NOT back open.
+            if (!allowed || identity.status() != ManagedAgentStatus.ACTIVE) {
                 return completed(problem(403, lifecycleProblemCode(identity.status()), "Identity cannot sign."));
             }
             if (signHandler == null) return signWithKeyStore(identity, request, lifetime, context);
@@ -355,9 +381,23 @@ public final class AepPlatform {
             PlatformResponse<PlatformSignResponses.Response> response,
             PlatformIdentityRecord identity,
             PlatformSignRequest request) {
+        // PLT-SIGN-017 keeps the HTTP Retry-After header off this contract entirely, not only off a
+        // pending response: polling cadence travels in retry_after_seconds. The header is checked
+        // before the Problem Details branch so a handler cannot smuggle it in on an error either.
+        if (hasRetryAfter(response.headers())) {
+            return CompletableFuture.failedFuture(
+                    new IllegalArgumentException("Platform sign handler must not send a Retry-After header."));
+        }
         if (validProblem(response)) return completed(response);
-        if (response == null
-                || (response.status() != 200 && response.status() != 202)
+        // PLT-SIGN-010 caps the effective assertion lifetime, and the configured maximum may cut it
+        // shorter. This runs ahead of the schema gate so an unparseable or unbounded validity window
+        // is reported as the lifetime failure it is rather than as a generic shape mismatch.
+        if (response.body() instanceof PlatformSignResponses.Completed bounded && !boundedLifetime(bounded)) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException(
+                    "Platform sign handler returned an assertion lifetime outside the permitted window."));
+        }
+        if ((response.status() != 200 && response.status() != 202)
+                || !Aep.MEDIA_TYPE.equals(response.contentType())
                 || response.body() == null
                 || response.problem() != null
                 || !AepValidation.platformSignResponse(response.body()).isEmpty()) {
@@ -379,17 +419,28 @@ public final class AepPlatform {
         return completed(response);
     }
 
-    private CompletionStage<PlatformResponse<PlatformVerificationResponse>> verifyNew(
+    private CompletionStage<PlatformResponse<PlatformVerificationResponse>> verifyAuthorized(
             PlatformVerificationRequest request, PlatformRequestContext context) {
+        String keyId = assertionKeyId(request.clientAssertion());
         ClientAssertionClaims decoded;
         try {
             decoded = ClientAssertions.decodeUnverified(request.clientAssertion());
         } catch (IllegalArgumentException exception) {
             return completed(unrecognized(request.serviceDid()));
         }
-        if (!decoded.issuer().equals(decoded.subject())) return completed(unrecognized(request.serviceDid()));
+        // PLT-SIGN-022 binds the JOSE kid of a Platform-hosted identity to the Service-scoped Agent
+        // DID carried in key_id, with no verification-method fragment. AEP core accepts a fragment
+        // because an ordinary did:web Agent may publish several methods, so the Platform-specific
+        // narrowing has to happen here.
+        if (decoded.issuer() == null
+                || !decoded.issuer().equals(decoded.subject())
+                || !decoded.issuer().equals(keyId)) {
+            return completed(unrecognized(request.serviceDid()));
+        }
         return identityStore.findByAgentDid(decoded.issuer()).thenCompose(identity -> {
-            if (identity.isEmpty() || !identity.get().serviceDid().equals(request.serviceDid())) {
+            if (identity.isEmpty()
+                    || !identity.get().serviceDid().equals(request.serviceDid())
+                    || !identity.get().keyId().equals(keyId)) {
                 return completed(unrecognized(request.serviceDid()));
             }
             PlatformIdentityRecord record = identity.get();
@@ -397,11 +448,23 @@ public final class AepPlatform {
                     .authorize(PlatformAuthorizationRequest.verify(record, request), context)
                     .thenCompose(authorized -> {
                         if (!authorized) return completed(unrecognized(request.serviceDid()));
-                        return lifecyclePolicy
-                                .canVerify(record, context)
-                                .thenCompose(allowed -> allowed
-                                        ? verifyAssertion(record, request, context)
-                                        : completed(unrecognized(request.serviceDid())));
+                        // PLT-VER-004 makes the current lifecycle state part of what verification
+                        // checks, and PLT-LIFE-002 settles what that state has to be. As on the
+                        // signing path, the configured policy narrows this floor rather than
+                        // replacing it.
+                        return idempotent(
+                                PlatformIdempotentOperation.HOSTED_VERIFICATION,
+                                listIncludingNulls(
+                                        request.clientAssertion(),
+                                        request.operation().value(),
+                                        request.resource(),
+                                        request.serviceDid()),
+                                context,
+                                () -> lifecyclePolicy
+                                        .canVerify(record, context)
+                                        .thenCompose(allowed -> allowed && record.status() == ManagedAgentStatus.ACTIVE
+                                                ? verifyAssertion(record, request, context)
+                                                : completed(unrecognized(request.serviceDid()))));
                     });
         });
     }
@@ -472,12 +535,6 @@ public final class AepPlatform {
             Object material,
             PlatformRequestContext context,
             Supplier<CompletionStage<PlatformResponse<T>>> execute) {
-        if (!hasPrincipal(context)
-                || context.idempotencyKey() == null
-                || context.idempotencyKey().isBlank()) {
-            return completed(
-                    problem(400, INVALID_REQUEST, "Idempotency-Key and authenticated principal are required."));
-        }
         PlatformIdempotencyInput input = new PlatformIdempotencyInput(
                 context.principal(), context.idempotencyKey(), operation, fingerprint(material));
         return idempotencyStore
@@ -485,6 +542,12 @@ public final class AepPlatform {
                 .thenApply(result -> result.state() == PlatformIdempotencyResult.State.CONFLICT
                         ? problem(409, "idempotency_conflict", "Idempotency key conflicts with an earlier request.")
                         : result.response());
+    }
+
+    private static boolean hasIdempotencyContext(PlatformRequestContext context) {
+        return hasPrincipal(context)
+                && context.idempotencyKey() != null
+                && !context.idempotencyKey().isBlank();
     }
 
     private static PlatformAgentIdentity publicIdentity(PlatformIdentityRecord identity) {
@@ -521,27 +584,86 @@ public final class AepPlatform {
         List<String> components = new ArrayList<>();
         components.add("did:web");
         components.add(encodeDidComponent(didHost));
+        // normalizeDidPathPrefix has already refused a blank, ".", or ".." component, so every split
+        // part is a real path segment.
         for (String component : didPathPrefix.split("/")) {
-            if (!component.isEmpty()) components.add(encodeDidComponent(component));
+            components.add(encodeDidComponent(component));
         }
         components.add(encodeDidComponent(agentDidId));
         return String.join(":", components);
     }
 
+    // requirePlatformDiscoveryDocument has already established that the template names
+    // {agent_did_id} and renders an absolute HTTPS URL carrying no user information and no fragment,
+    // and encodePathSegment keeps a generated identifier inside a single path segment. The shape the
+    // constructor probed is therefore the shape every identity gets.
     private String renderDidDocumentUrl(String agentDidId) {
-        String template = platformDiscovery.identity().didUrlTemplate();
-        if (!template.contains("{agent_did_id}")) {
-            throw new IllegalArgumentException("did_url_template must include {agent_did_id}.");
+        return platformDiscovery.identity().didUrlTemplate().replace("{agent_did_id}", encodePathSegment(agentDidId));
+    }
+
+    // PLT-DID-005 lets a Service treat a Platform-hosted Agent DID as an ordinary did:web DID, and
+    // PLT-DISC-006 makes did_url_template describe where those documents actually live. The DID host,
+    // the DID path prefix, and the template are configured independently, so nothing stopped a
+    // Platform from advertising a did_document_url no Service would ever fetch. Probing both with one
+    // identifier settles it at construction instead of at the first Service handshake.
+    private void validateDidUrlTemplate() {
+        String rendered = renderDidDocumentUrl(DID_URL_PROBE);
+        URI resolved = DidWeb.documentUri(createServiceScopedAgentDid(DID_URL_PROBE));
+        if (!rendered.equals(resolved.toString())) {
+            throw new IllegalArgumentException("did_url_template renders " + rendered
+                    + " where resolving the minted Agent DID reaches " + resolved + ".");
         }
-        String rendered = template.replace("{agent_did_id}", encodePathSegment(agentDidId));
-        URI uri = URI.create(rendered);
-        if (!"https".equalsIgnoreCase(uri.getScheme())
-                || uri.getHost() == null
-                || uri.getUserInfo() != null
-                || uri.getFragment() != null) {
-            throw new IllegalArgumentException("did_url_template must render an absolute HTTPS URL.");
+    }
+
+    // A sign handler mints its own issued_at and expires_at, so the bound the key-store path inherits
+    // from the validated request has to be re-checked against what the handler actually returned.
+    private boolean boundedLifetime(PlatformSignResponses.Completed completed) {
+        Instant issuedAt;
+        Instant expiresAt;
+        try {
+            issuedAt = OffsetDateTime.parse(completed.issuedAt()).toInstant();
+            expiresAt = OffsetDateTime.parse(completed.expiresAt()).toInstant();
+        } catch (DateTimeParseException exception) {
+            return false;
         }
-        return rendered;
+        Duration lifetime = Duration.between(issuedAt, expiresAt);
+        return !lifetime.isZero() && !lifetime.isNegative() && lifetime.compareTo(maximumLifetime) <= 0;
+    }
+
+    private static boolean hasRetryAfter(Map<String, List<String>> headers) {
+        return headers.keySet().stream().anyMatch(name -> "retry-after".equalsIgnoreCase(name));
+    }
+
+    // Returns null for a token that is not a signed JWT or carries no kid, which the caller then
+    // fails on the Agent DID comparison rather than by unwinding a second parse failure.
+    private static String assertionKeyId(String assertion) {
+        try {
+            return SignedJWT.parse(assertion).getHeader().getKeyID();
+        } catch (ParseException exception) {
+            return null;
+        }
+    }
+
+    private static String entityTag(PlatformDiscoveryDocument document) {
+        return "\"sha256:" + fingerprint(discoveryMaterial(document)) + "\"";
+    }
+
+    private static List<Object> discoveryMaterial(PlatformDiscoveryDocument document) {
+        return listIncludingNulls(
+                document.version(),
+                document.endpoints().hostedVerification(),
+                document.endpoints().lifecycle(),
+                document.endpoints().list(),
+                document.endpoints().provision(),
+                document.endpoints().sign(),
+                document.http().endpointBase(),
+                document.identity().didMethods(),
+                document.identity().didUrlTemplate(),
+                document.platform().did(),
+                document.platform().hostedVerification(),
+                document.platform().name(),
+                document.signing().algorithms(),
+                document.signing().defaultLifetimeSeconds());
     }
 
     private static boolean validListQuery(PlatformIdentityListQuery query) {
@@ -664,12 +786,15 @@ public final class AepPlatform {
         return context == null ? new PlatformRequestContext(null, null) : context;
     }
 
+    // RFC 9457 makes the status member the HTTP status code of the response it travels in, so a
+    // handler reporting one code in the body and another on the wire has produced a Problem Details
+    // document no client can act on consistently.
     private static boolean validProblem(PlatformResponse<?> response) {
-        return response != null
-                && response.status() >= 400
+        return response.status() >= 400
                 && Aep.PROBLEM_MEDIA_TYPE.equals(response.contentType())
                 && response.body() == null
                 && response.problem() != null
+                && response.problem().status() == response.status()
                 && AepValidation.problemDetails(response.problem()).isEmpty();
     }
 

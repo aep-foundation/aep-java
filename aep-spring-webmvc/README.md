@@ -38,3 +38,14 @@ RouterFunction<ServerResponse> orders = RouterFunctions.route()
 
 After successful authentication, the filter stores an `AuthenticatedPrincipal` under
 `AepSpringWebMvc.PRINCIPAL_ATTRIBUTE` in the `ServerRequest` attributes.
+
+The authentication filter waits on the request thread, including when an asynchronous store
+or verifier is used. This keeps the application handler on the thread where Spring and the
+application established their request context. A request thread remains occupied until
+authentication completes; the application handler can still return an asynchronous response.
+AEP command routes complete their responses asynchronously.
+
+Applications that need nonblocking authentication can build their own integration around
+`AepServiceHttpHandler.authenticate()`, which returns a `CompletionStage`. That integration
+must manage Spring's request context and dispatch lifecycle; moving the filter to an executor
+does not preserve the request thread's context.

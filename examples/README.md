@@ -9,13 +9,20 @@ Run every example from the repository root:
 ./mvnw -pl examples -am verify
 ```
 
-Run one example while iterating:
+To run one example while iterating, first install the reactor dependencies from the repository
+root. This also runs both examples and the repository checks:
 
 ```sh
-./mvnw -pl examples -am compile exec:java \
+./mvnw -pl examples -am install
+```
+
+Then target only the examples project:
+
+```sh
+./mvnw -f examples/pom.xml compile exec:java \
   -Dexec.mainClass=foundation.aep.examples.AgentServiceExample
 
-./mvnw -pl examples -am compile exec:java \
+./mvnw -f examples/pom.xml compile exec:java \
   -Dexec.mainClass=foundation.aep.examples.PlatformExample
 ```
 
@@ -33,7 +40,8 @@ starts an AEP Service on a random loopback port and drives it with an AEP Agent.
 7. per-credential revocation and rejection of the revoked credential.
 
 [`JdkAepTransport.java`](./src/main/java/foundation/aep/examples/JdkAepTransport.java) adapts the JDK
-`HttpClient` to the Agent's `AepHttpTransport` boundary. The Service uses the published
+`HttpClient` to the shared `AepHttpTransport` boundary. Redirects are not followed automatically,
+and each outgoing protocol request uses the timeout supplied by the SDK. The Service uses the published
 `aep-httpserver` adapter rather than an example-only HTTP dispatcher.
 
 Expected output identifies each completed step without printing the API key or signed assertion:

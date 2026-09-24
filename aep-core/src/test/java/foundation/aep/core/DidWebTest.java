@@ -10,6 +10,18 @@ import org.junit.jupiter.api.Test;
 
 final class DidWebTest {
     @Test
+    void preservesEncodedPathCharacters() {
+        for (String component : java.util.List.of("account%3A123", "%252e%252e", "alice%3Factive", "alice%23key")) {
+            assertEquals(
+                    URI.create("https://example.com/" + component + "/did.json"),
+                    DidWeb.documentUri("did:web:example.com:" + component));
+        }
+        for (String component : java.util.List.of("alice?query", "alice#fragment", "%2e", "%2e%2e")) {
+            assertThrows(IllegalArgumentException.class, () -> DidWeb.documentUri("did:web:example.com:" + component));
+        }
+    }
+
+    @Test
     void resolvesRootAndPathIdentifiers() {
         assertEquals(URI.create("https://example.com/.well-known/did.json"), DidWeb.documentUri("did:web:example.com"));
         assertEquals(

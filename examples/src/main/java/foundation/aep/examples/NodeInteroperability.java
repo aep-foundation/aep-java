@@ -14,11 +14,14 @@ import foundation.aep.agent.AepAgentException;
 import foundation.aep.agent.AgentAuthentication;
 import foundation.aep.agent.PlatformIdentityProvider;
 import foundation.aep.core.Aep;
+import foundation.aep.core.AepHttpTransport;
 import foundation.aep.core.AepJson;
+import foundation.aep.core.AssertionOperation;
 import foundation.aep.core.ClaimValues;
 import foundation.aep.core.ClientAssertionClaims;
 import foundation.aep.core.ClientAssertions;
 import foundation.aep.core.DidWeb;
+import foundation.aep.core.EnrollRequest;
 import foundation.aep.core.GrantResponses;
 import foundation.aep.core.InspectDocument;
 import foundation.aep.core.ManagedAgentStatus;
@@ -37,7 +40,11 @@ import foundation.aep.platform.PlatformRequestContext;
 import foundation.aep.platform.PlatformResponse;
 import foundation.aep.service.AepService;
 import foundation.aep.service.AepServiceHttpHandler;
+import foundation.aep.service.AssertionVerificationContext;
 import foundation.aep.service.ClientAssertionVerifier;
+import foundation.aep.service.CommandOptions;
+import foundation.aep.service.HostedPlatformClientAssertionVerifier;
+import foundation.aep.service.ProtectedResourceRequest;
 import foundation.aep.service.ServiceCredentialStore;
 import foundation.aep.service.StoredCredentialGrantTypes;
 import java.io.IOException;
@@ -48,6 +55,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -65,6 +75,7 @@ public final class NodeInteroperability {
     private static final String HTTP_GET = "GET";
     private static final String HTTP_POST = "POST";
     private static final int HTTP_OK = 200;
+    private static final int HTTP_UNAUTHORIZED = 401;
     private static final String PLATFORM_AUTHORIZATION = "Bearer demo-agent";
     private static final String PLATFORM_IDENTITIES = "/platform/agent-identities";
     private static final int MAXIMUM_BODY_BYTES = 65_536;
@@ -132,7 +143,118 @@ public final class NodeInteroperability {
         result.put("revoked", revoked);
         result.put("service", "node");
         result.put("service_did", inspection.document().service().did());
+        result.put(
+                "hosted_verification",
+                verifyHosted(
+                        identities,
+                        platformOrigin,
+                        serviceOrigin,
+                        inspection.document().service().did(),
+                        transport));
         System.out.println(AepJson.write(result)); // NOPMD - Interoperability process output.
+    }
+
+    private static boolean verifyHosted(
+            PlatformIdentityProvider identities,
+            URI platformOrigin,
+            URI serviceOrigin,
+            String serviceDid,
+            JdkAepTransport transport) {
+        var identity = identities
+                .getOrCreate(serviceOrigin, serviceDid)
+                .toCompletableFuture()
+                .join();
+        // The test Platform runs on loopback HTTP. Only this test transport remaps the configured HTTPS endpoint.
+        AepHttpTransport localTransport = request -> transport.execute(new AepHttpTransport.Request(
+                request.method(),
+                platformOrigin.resolve("/v1/aep/verifications"),
+                request.headers(),
+                request.body(),
+                request.timeout()));
+        var verifier = HostedPlatformClientAssertionVerifier.builder(
+                        URI.create("https://platform.example/v1/aep/verifications"), localTransport)
+                .authorization(PLATFORM_AUTHORIZATION)
+                .build();
+        var document = InspectDocument.builder()
+                .version(Aep.VERSION)
+                .authentication(new InspectDocument.Authentication(List.of(Aep.AUTHENTICATION_METHOD_JWT)))
+                .bindings(new InspectDocument.Bindings(List.of("http")))
+                .claims(new InspectDocument.Claims(List.of(), List.of(), List.of()))
+                .commands(new InspectDocument.Commands(
+                        List.of(AssertionOperation.ENROLL.value(), "inspect", AssertionOperation.STATUS.value()),
+                        List.of(),
+                        Map.of()))
+                .core(new InspectDocument.Core(Aep.REQUIRED_SIGNING_ALGORITHMS))
+                .http(new InspectDocument.Http("/aep/", null))
+                .identity(new InspectDocument.Identity(List.of("did:web")))
+                .service(new InspectDocument.Service(serviceDid))
+                .build();
+        var service = AepService.builder(document, verifier)
+                .allowInsecureLoopback(true)
+                .build();
+        long now = Instant.now().getEpochSecond();
+        var enrollClaims = new ClientAssertionClaims(
+                identity.did(),
+                identity.did(),
+                serviceDid,
+                AssertionOperation.ENROLL,
+                now,
+                now + 300,
+                UUID.randomUUID().toString(),
+                null);
+        String enroll =
+                identity.signer().sign(enrollClaims).toCompletableFuture().join();
+        String forged = enroll.substring(0, enroll.lastIndexOf('.') + 1) + "A".repeat(86);
+        var rejected = service.enroll(
+                        new EnrollRequest(identity.did(), null, null),
+                        CommandOptions.idempotent(forged, "forged-enrollment"))
+                .toCompletableFuture()
+                .join();
+        if (rejected.status() != HTTP_UNAUTHORIZED) {
+            throw new IllegalStateException("Hosted verification accepted a forged signature.");
+        }
+        var context = new AssertionVerificationContext(
+                serviceDid,
+                AssertionOperation.ENROLL,
+                null,
+                "hosted-enrollment",
+                Aep.REQUIRED_SIGNING_ALGORITHMS,
+                Clock.systemUTC(),
+                Duration.ofSeconds(30),
+                true);
+        verifier.verify(enroll, context).toCompletableFuture().join();
+        // The Service retries the same verification after the first result; Platform idempotency must permit it.
+        var enrolled = service.enroll(
+                        new EnrollRequest(identity.did(), null, null),
+                        CommandOptions.idempotent(enroll, "hosted-enrollment"))
+                .toCompletableFuture()
+                .join();
+        if (enrolled.status() != HTTP_OK) throw new IllegalStateException("Hosted enrollment failed.");
+        String resource = "https://" + serviceOrigin.getRawAuthority() + "/api/resource";
+        String assertion = identity.signer()
+                .sign(new ClientAssertionClaims(
+                        identity.did(),
+                        identity.did(),
+                        serviceDid,
+                        AssertionOperation.AUTHENTICATE,
+                        now,
+                        now + 300,
+                        UUID.randomUUID().toString(),
+                        resource))
+                .toCompletableFuture()
+                .join();
+        var request = new ProtectedResourceRequest(
+                Map.of("Authorization", List.of("AEP " + assertion)), "GET", URI.create(resource));
+        var wrongResource = new ProtectedResourceRequest(
+                request.headers(), "GET", URI.create(resource).resolve("/api/other"));
+        if (service.authenticate(wrongResource).toCompletableFuture().join().authenticated()) {
+            throw new IllegalStateException("Hosted verification accepted a mismatched resource.");
+        }
+        if (!service.authenticate(request).toCompletableFuture().join().authenticated()
+                || service.authenticate(request).toCompletableFuture().join().authenticated()) {
+            throw new IllegalStateException("Hosted authentication or replay protection failed.");
+        }
+        return true;
     }
 
     private static void runServer(String... arguments) throws IOException, InterruptedException {

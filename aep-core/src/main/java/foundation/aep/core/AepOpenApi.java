@@ -2,12 +2,18 @@ package foundation.aep.core;
 
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 public final class AepOpenApi {
+    private static final int SINGLE = 1;
+
     private AepOpenApi() {}
 
     public static URI resolveDocumentUri(URI finalInspectUri, String reference) {
@@ -54,6 +60,61 @@ public final class AepOpenApi {
         return new PathMatch(method.toUpperCase(Locale.ROOT), selected.template());
     }
 
+    /**
+     * Resolves the effective security for one operation (CORE-OAS-011/013/014/015).
+     *
+     * <p>Operation-level security replaces the root value rather than adding to it, an empty list
+     * makes the operation public, an empty requirement object is an anonymous alternative, several
+     * requirement objects are alternatives, and several schemes inside one object are compound. An
+     * Agent that cannot satisfy every member of a compound requirement treats that requirement as
+     * unsupported, and never reduces it to the members it happens to support: the returned
+     * alternatives are always whole requirement objects.
+     *
+     * @param rootSecurity the document-level {@code security} value, or {@code null} when absent
+     * @param operationSecurity the operation's own {@code security} value, or {@code null} when the
+     *     operation omits the member and therefore inherits the root value
+     * @param supportedSchemes the security-scheme names this Agent is able to satisfy
+     */
+    public static SecurityResolution resolveSecurity(
+            List<Map<String, List<String>>> rootSecurity,
+            List<Map<String, List<String>>> operationSecurity,
+            Collection<String> supportedSchemes) {
+        Set<String> supported = supportedSchemes == null ? Set.of() : new LinkedHashSet<>(supportedSchemes);
+        List<Map<String, List<String>>> effective = effectiveSecurity(rootSecurity, operationSecurity);
+        if (effective.isEmpty()) {
+            return new SecurityResolution(SecurityDisposition.PUBLIC, List.of());
+        }
+        List<List<String>> requirements = new ArrayList<>(effective.size());
+        for (Map<String, List<String>> requirement : effective) {
+            if (requirement == null) {
+                throw new IllegalArgumentException("An OpenAPI security requirement must not be null.");
+            }
+            requirements.add(List.copyOf(requirement.keySet()));
+        }
+        if (requirements.stream().anyMatch(List::isEmpty)) {
+            return new SecurityResolution(SecurityDisposition.OPTIONAL_ANONYMOUS, List.of());
+        }
+        List<List<String>> satisfiable =
+                requirements.stream().filter(supported::containsAll).toList();
+        if (satisfiable.isEmpty()) {
+            return new SecurityResolution(SecurityDisposition.FALLBACK_LIVE_CHALLENGE, List.of());
+        }
+        if (requirements.size() > SINGLE) {
+            return new SecurityResolution(SecurityDisposition.ALTERNATIVES, satisfiable);
+        }
+        SecurityDisposition disposition =
+                satisfiable.get(0).size() > SINGLE ? SecurityDisposition.ALL_REQUIRED : SecurityDisposition.REQUIRED;
+        return new SecurityResolution(disposition, satisfiable);
+    }
+
+    private static List<Map<String, List<String>>> effectiveSecurity(
+            List<Map<String, List<String>>> rootSecurity, List<Map<String, List<String>>> operationSecurity) {
+        if (operationSecurity != null) {
+            return operationSecurity;
+        }
+        return rootSecurity == null ? List.of() : rootSecurity;
+    }
+
     private static Candidate match(String template, String path, TrailingSlashMode mode) {
         if (template == null || !template.startsWith("/") || template.indexOf('?') >= 0 || template.indexOf('#') >= 0) {
             return null;
@@ -86,7 +147,7 @@ public final class AepOpenApi {
             throw new IllegalArgumentException("Request path must not be blank.");
         }
         URI reference = URI.create(value);
-        String path = reference.getPath();
+        String path = reference.getRawPath();
         if (path == null || !path.startsWith("/")) {
             throw new IllegalArgumentException("Request path must be absolute.");
         }
@@ -117,6 +178,43 @@ public final class AepOpenApi {
                 || value.getRawUserInfo() != null
                 || value.getRawFragment() != null) {
             throw new IllegalArgumentException(name + " must be a safe absolute URI.");
+        }
+    }
+
+    /** How an Agent must treat the security an operation resolves to. */
+    public enum SecurityDisposition {
+        PUBLIC("public"),
+        OPTIONAL_ANONYMOUS("optional-anonymous"),
+        REQUIRED("required"),
+        ALTERNATIVES("alternatives"),
+        ALL_REQUIRED("all-required"),
+        FALLBACK_LIVE_CHALLENGE("fallback-live-challenge");
+
+        private final String wireValue;
+
+        SecurityDisposition(String wireValue) {
+            this.wireValue = wireValue;
+        }
+
+        public String value() {
+            return wireValue;
+        }
+    }
+
+    /**
+     * The resolved security for an operation.
+     *
+     * @param satisfiable the complete requirement objects the Agent can satisfy, each listed as the
+     *     scheme names it must present together; empty unless the disposition selects credentials
+     */
+    public record SecurityResolution(SecurityDisposition disposition, List<List<String>> satisfiable) {
+        public SecurityResolution {
+            Objects.requireNonNull(disposition, "disposition");
+            List<List<String>> copied = new ArrayList<>();
+            if (satisfiable != null) {
+                satisfiable.forEach(requirement -> copied.add(Copies.list(requirement)));
+            }
+            satisfiable = List.copyOf(copied);
         }
     }
 

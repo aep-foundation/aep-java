@@ -46,21 +46,25 @@ requested Service and operation:
 ```java
 PlatformRequestContext provisionContext =
     new PlatformRequestContext(principal, idempotencyKey);
-PlatformAgentIdentity identity = platform.provision(
+PlatformResponse<PlatformAgentIdentity> provisioned = platform.provision(
         new PlatformProvisionRequest(serviceDid), provisionContext)
     .toCompletableFuture()
-    .join()
-    .body();
+    .join();
+if (provisioned.status() != 200) {
+    throw new IllegalStateException("Provisioning failed with HTTP " + provisioned.status());
+}
+PlatformAgentIdentity identity = provisioned.body();
 
 PlatformSignRequest request = new PlatformSignRequest(
     jwtId, "300", AssertionOperation.ENROLL, platformContext, null, serviceDid);
-PlatformSignResponses.Response response = platform.sign(
+PlatformResponse<PlatformSignResponses.Response> signed = platform.sign(
         identity.agentIdentityId(), request, signContext)
     .toCompletableFuture()
-    .join()
-    .body();
+    .join();
 ```
 
+Check `signed.status()` before consuming the result: `200` contains a completed assertion, `202`
+contains a pending response, and an error response exposes Problem Details through `problem()`.
 An application may return a pending signing response through `PlatformSignHandler` when signing
 requires an approval. Hosted verification is optional and must match the discovery document. The
 Platform applies lifecycle state to signing and DID document availability.
