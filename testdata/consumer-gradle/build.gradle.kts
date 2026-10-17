@@ -2,7 +2,7 @@ plugins {
     java
 }
 
-val aepVersion = providers.gradleProperty("aepVersion").getOrElse("0.1.1")
+val aepVersion = providers.gradleProperty("aepVersion").getOrElse("0.2.0")
 val springGeneration = providers.gradleProperty("springGeneration").getOrElse("6")
 
 repositories {
