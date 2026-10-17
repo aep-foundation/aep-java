@@ -36,14 +36,32 @@ esac
   --settings "$settings" \
   -Prelease \
   -Dgpg.skip=true \
-  -Dcentral.skipPublishing=true \
+  -DskipUpload=true \
   clean deploy
+
+bundle="$root/target/central-publishing/central-bundle.zip"
+entries=$(unzip -Z1 "$bundle")
+if printf '%s\n' "$entries" | grep -Eq '(^|/)(maven-metadata[^/]*|_remote\.repositories)(/|$)|foundation/aep/aep-(examples|conformance)/'; then
+  echo "Release bundle contains local repository metadata or unpublished modules." >&2
+  exit 1
+fi
+
+for artifact in aep-java aep-bom aep-core aep-json-jackson2 aep-json-jackson3 aep-agent aep-service aep-httpserver aep-servlet aep-spring-webmvc aep-platform; do
+  if ! printf '%s\n' "$entries" | grep -Fxq "foundation/aep/$artifact/$version/$artifact-$version.pom"; then
+    echo "Release bundle is missing the POM for $artifact." >&2
+    exit 1
+  fi
+done
 
 for artifact in aep-core aep-json-jackson2 aep-json-jackson3 aep-agent aep-service aep-httpserver aep-servlet aep-spring-webmvc aep-platform; do
   for classifier in "" -sources -javadoc; do
     file="$root/$artifact/target/$artifact-$version$classifier.jar"
     if [ ! -s "$file" ]; then
       echo "Missing release artifact: $file" >&2
+      exit 1
+    fi
+    if ! printf '%s\n' "$entries" | grep -Fxq "foundation/aep/$artifact/$version/$artifact-$version$classifier.jar"; then
+      echo "Release bundle is missing $artifact-$version$classifier.jar." >&2
       exit 1
     fi
   done
