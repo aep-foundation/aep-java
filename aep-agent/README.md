@@ -42,6 +42,26 @@ clock. Changing the Agent's clock cannot extend a credential's lifetime at the S
 Custom Inspect caches must preserve `AgentInspectCache.Entry.cacheHeaders` alongside the document
 and validators, so a `304 Not Modified` response retains the cached freshness policy.
 
+### Upgrading application storage from 0.1.1
+
+Recompile custom adapters against the complete, matching set of AEP modules selected by the BOM.
+`AgentCredentialStore.find(serviceDid, grantType)` must become
+`find(serviceDid, grantType, Instant now)`. The compiler requires this update. Select an unexpired
+credential using the supplied time, rather than returning an expired record when another usable
+credential exists. Do not reuse an adapter binary compiled against the old interface.
+
+Credential records, Service enrollment records, and completed command-idempotency responses do not
+require a hash conversion. Keep them: deleting credentials forces reauthentication, and deleting
+completed responses can repeat operations. The `find` interface change concerns selection, not a
+change to the stored credential representation.
+
+If your application persists Inspect-cache entries, update its serializer to preserve `cacheHeaders`
+and invalidate only entries written without that metadata. The five-argument `Entry` constructor
+still compiles and supplies an empty header map, but cannot reconstruct response headers that were
+not stored. A cache miss lets the Agent fetch the document and its headers again. Keep Inspect-cache
+data separate from identity, credential, enrollment, and command-idempotency storage; those records
+must not be cleared as part of cache invalidation.
+
 ## Use a hosted identity Platform
 
 `PlatformIdentityProvider` implements the Agent identity boundary against an AEP Platform. It
