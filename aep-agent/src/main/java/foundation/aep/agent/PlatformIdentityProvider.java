@@ -332,6 +332,8 @@ public final class PlatformIdentityProvider implements AgentIdentityProvider {
             AepHttpTransport.Response response,
             Optional<DiscoveryEntry> prior) {
         Instant now = clock.instant();
+        AepHttpTransport.Response metadata = AgentHttp.revalidated(
+                response, prior.map(DiscoveryEntry::cacheHeaders).orElse(Map.of()));
         return new DiscoveryEntry(
                 document,
                 finalUri,
@@ -339,8 +341,9 @@ public final class PlatformIdentityProvider implements AgentIdentityProvider {
                         .orElseGet(() -> prior.map(DiscoveryEntry::etag).orElse(null)),
                 AgentHttp.header(response, "Last-Modified")
                         .orElseGet(() -> prior.map(DiscoveryEntry::lastModified).orElse(null)),
-                AgentHttp.expiresAt(response, now, defaultDiscoveryFreshness),
-                AgentHttp.isNoStore(response));
+                AgentHttp.expiresAt(metadata, now, defaultDiscoveryFreshness),
+                AgentHttp.isNoStore(metadata),
+                AgentHttp.cacheHeaders(metadata));
     }
 
     private URI redirectTarget(URI current, AepHttpTransport.Response response) {
@@ -393,11 +396,22 @@ public final class PlatformIdentityProvider implements AgentIdentityProvider {
 
     private String idempotencyKey() {
         String value = idempotencyKeys.get();
-        if (value == null || value.isBlank()) {
+        if (value == null || value.isBlank() || !value.equals(value.strip()) || hasControlCharacter(value)) {
             throw new AepAgentException(
-                    "platform_idempotency_key_invalid", "AEP Platform idempotency key must not be blank");
+                    "platform_idempotency_key_invalid",
+                    "AEP Platform idempotency key must be a field value without surrounding whitespace");
         }
         return value;
+    }
+
+    private static boolean hasControlCharacter(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (character < 0x20 || character == 0x7f) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean ownedHeader(String name) {
@@ -504,8 +518,8 @@ public final class PlatformIdentityProvider implements AgentIdentityProvider {
     }
 
     private boolean bindsServiceDid(String serviceDid, URI serviceOrigin) {
-        if (!allowInsecureLoopback) return DidWeb.bindsOrigin(serviceDid, serviceOrigin);
         try {
+            if (!allowInsecureLoopback) return DidWeb.bindsOrigin(serviceDid, serviceOrigin);
             return AgentHttp.sameOrigin(DidWeb.documentUri(serviceDid, true), serviceOrigin);
         } catch (IllegalArgumentException exception) {
             return false;
@@ -541,7 +555,8 @@ public final class PlatformIdentityProvider implements AgentIdentityProvider {
             String etag,
             String lastModified,
             Instant expiresAt,
-            boolean noStore) {}
+            boolean noStore,
+            Map<String, List<String>> cacheHeaders) {}
 
     public static final class Builder {
         private final URI requestedPlatformOrigin;

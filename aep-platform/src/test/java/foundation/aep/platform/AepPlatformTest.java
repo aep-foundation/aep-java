@@ -346,6 +346,7 @@ final class AepPlatformTest {
         AtomicInteger did = new AtomicInteger();
         return AepPlatform.builder(discovery(hostedVerification), "p.example", authorizer, keyStore, resolve())
                 .clock(Clock.fixed(NOW, ZoneOffset.UTC))
+                .didPathPrefix("a")
                 .identityIdSupplier(() -> Integer.toString(identity.incrementAndGet()))
                 .agentDidIdSupplier(() -> "opaque" + did.incrementAndGet())
                 .replayStore(PlatformReplayStore.inMemory());
@@ -385,12 +386,12 @@ final class AepPlatformTest {
 
     private static PlatformIdentityRecord identityRecord() {
         return PlatformIdentityRecord.builder()
-                .agentDid("did:web:p.example:agents:opaque")
+                .agentDid("did:web:p.example:a:opaque")
                 .agentDidId("opaque")
                 .agentIdentityId("pai_identity")
                 .createdAt(NOW)
                 .didDocumentUrl("https://p.example/a/opaque/did.json")
-                .keyId("did:web:p.example:agents:opaque")
+                .keyId("did:web:p.example:a:opaque")
                 .principal("principal")
                 .serviceDid(SERVICE_DID)
                 .signingAlgorithms(List.of("ES256"))

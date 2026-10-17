@@ -16,6 +16,7 @@ requireEqual(javaResult.enrollment, "active", "Java Agent enrollment");
 requireEqual(javaResult.credential_mode, "api-key", "Java Agent credential mode");
 requireEqual(javaResult.protected_resource_status, 200, "Java Agent protected resource");
 requireEqual(javaResult.revoked, true, "Java Agent credential revocation");
+requireEqual(javaResult.hosted_verification, true, "Java Service hosted verification against Node Platform");
 
 requireEqual(nodeResult.credentialMode, "api-key", "Node Agent credential mode");
 requireEqual(nodeResult.enroll?.status, "active", "Node Agent enrollment");
@@ -30,6 +31,13 @@ requireEqual(Object.keys(nodeResult.revoke ?? {}).length, 0, "Node Agent Revoke 
 const report = {
   aep_version: "1.0",
   evidence: [
+    {
+      service: "java",
+      counterpart: "node",
+      flow: "Hosted verification, exact retry, enrollment, protected resource, replay and resource rejection",
+      role: "platform",
+      status: "passed"
+    },
     {
       agent: "java",
       counterpart: "node",

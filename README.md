@@ -129,6 +129,10 @@ The shared Agent, Service, Platform, and credential-profile conformance reports 
 Set `AEP_SPECS_DIR` when the specifications repository is not located at `../aep-specs`. Reports are written to
 `.conformance/reports/`.
 
+Agent reports include the hosted-identity provider. Protected-resource redirect checks cover
+origin rejection and fresh resource-bound authentication headers; the application owns HTTP
+forwarding and anonymous restarts, as described in the [Agent guide](aep-agent/README.md#authenticate-and-revoke).
+
 Format Java sources with:
 
 ```sh

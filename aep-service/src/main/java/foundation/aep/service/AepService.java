@@ -33,6 +33,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -40,6 +41,7 @@ import java.util.function.Supplier;
 
 public final class AepService {
     private static final String ERROR_NOT_RECOGNIZED = "not_recognized";
+    private static final Set<String> AEP_SCHEMES = Set.of("aep", "bearer", "basic");
     private static final String TITLE_NOT_RECOGNIZED = "Not recognized";
     private static final String ERROR_INVALID_REQUEST = "invalid_request";
     private static final String TITLE_INVALID_REQUEST = "Invalid request";
@@ -645,13 +647,26 @@ public final class AepService {
         for (String value : standard) {
             try {
                 recognized.add(AepHttp.parseAuthorization(value, AuthorizationCarrier.STANDARD));
-            } catch (IllegalArgumentException ignored) {
-                // Unrelated Authorization schemes remain available to other protocols.
+            } catch (IllegalArgumentException exception) {
+                // Unrelated Authorization schemes remain available to other protocols. A value that
+                // names an AEP scheme is not one of those: under CORE-PR-038 it is a malformed AEP
+                // presentation rather than an absent one, which answers not_recognized instead of
+                // authentication_required.
+                if (namesAepScheme(value)) return Presentation.invalid();
             }
         }
         if (recognized.size() > SINGLE_VALUE || (recognized.size() == SINGLE_VALUE && standard.size() > SINGLE_VALUE))
             return Presentation.invalid();
         return Presentation.valid(recognized.isEmpty() ? null : recognized.get(0));
+    }
+
+    private static boolean namesAepScheme(String value) {
+        if (value == null) return false;
+        int end = 0;
+        while (end < value.length() && value.charAt(end) != ' ' && value.charAt(end) != '\t') {
+            end++;
+        }
+        return AEP_SCHEMES.contains(value.substring(0, end).toLowerCase(Locale.ROOT));
     }
 
     private static boolean isRecognizedAuthorization(String value) {

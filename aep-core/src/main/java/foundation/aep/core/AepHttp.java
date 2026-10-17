@@ -7,6 +7,24 @@ import java.util.Map;
 public final class AepHttp {
     private AepHttp() {}
 
+    /**
+     * Reports whether a credential is the visible US-ASCII the AEP, Bearer, and Basic grammars
+     * share. Anything else, notably a control character or an embedded CRLF, would travel back
+     * into a request header through {@link #renderAuthorization}.
+     */
+    private static boolean isCredentialToken(String value) {
+        if (value.isEmpty()) {
+            return false;
+        }
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (character < 0x21 || character > 0x7e) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     public static String normalizeEndpointBase(String endpointBase) {
         String value = endpointBase == null ? Aep.DEFAULT_ENDPOINT_BASE : endpointBase;
         if (!value.startsWith("/") || value.startsWith("//")) {
@@ -44,6 +62,10 @@ public final class AepHttp {
         if (value.credentials() == null || value.credentials().isEmpty()) {
             throw new AepAuthorizationException("invalid_request", "Authorization credentials must not be empty.");
         }
+        if (!isCredentialToken(value.credentials())) {
+            throw new AepAuthorizationException(
+                    "invalid_request", "Authorization credentials must be visible US-ASCII.");
+        }
         return Map.of(authorizationHeaderName(value.carrier()), value.scheme().value() + " " + value.credentials());
     }
 
@@ -57,8 +79,8 @@ public final class AepHttp {
         if (carrier == AuthorizationCarrier.DEDICATED && value.indexOf(',') >= 0) {
             throw new AepAuthorizationException("not_recognized", "The dedicated authorization field is ambiguous.");
         }
-        int separator = value.indexOf(' ');
-        if (separator <= 0 || separator == value.length() - 1) {
+        int separator = separatorIndex(value);
+        if (separator <= 0) {
             throw unrecognizedAuthorization();
         }
         String scheme = value.substring(0, separator).toLowerCase(Locale.ROOT);
@@ -69,11 +91,36 @@ public final class AepHttp {
                     case "basic" -> AuthorizationScheme.BASIC;
                     default -> throw unrecognizedAuthorization();
                 };
-        String credentials = value.substring(separator + 1);
-        if (credentials.isBlank() || Character.isWhitespace(credentials.charAt(0))) {
+        // CORE-AUTH-001 spells the separator as 1*SP, so repeated spaces belong to the grammar
+        // rather than marking a malformed presentation, and a field value may carry trailing
+        // optional whitespace that the sender is entitled to add.
+        String credentials = trimOptionalWhitespace(value.substring(separator));
+        if (!isCredentialToken(credentials)) {
             throw unrecognizedAuthorization();
         }
         return new ProtectedResourceAuthorization(carrier, parsed, credentials);
+    }
+
+    private static int separatorIndex(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (character == ' ' || character == '\t') {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private static String trimOptionalWhitespace(String value) {
+        int start = 0;
+        int end = value.length();
+        while (start < end && (value.charAt(start) == ' ' || value.charAt(start) == '\t')) {
+            start++;
+        }
+        while (end > start && (value.charAt(end - 1) == ' ' || value.charAt(end - 1) == '\t')) {
+            end--;
+        }
+        return value.substring(start, end);
     }
 
     private static AepAuthorizationException unrecognizedAuthorization() {

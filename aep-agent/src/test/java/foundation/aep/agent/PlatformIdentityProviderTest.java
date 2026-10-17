@@ -177,6 +177,36 @@ class PlatformIdentityProviderTest {
     }
 
     @Test
+    void discoveryPreservesNoCacheOnNotModifiedResponses() {
+        QueueTransport transport = new QueueTransport(
+                aepResponse(200, Map.of("Cache-Control", List.of("no-cache"), "ETag", List.of("v1")), discovery()),
+                aepResponse(200, identityList()),
+                response(304, Map.of(), ""),
+                aepResponse(200, identityList()),
+                response(304, Map.of(), ""),
+                aepResponse(200, identityList()));
+        PlatformIdentityProvider provider = provider(transport);
+        for (int call = 0; call < 3; call++) {
+            provider.findIdentityByServiceDid(SERVICE_DID).toCompletableFuture().join();
+        }
+        assertEquals(6, transport.requests.size());
+        assertEquals(List.of("v1"), transport.requests.get(4).headers().get("If-None-Match"));
+    }
+
+    @Test
+    void discoveryRevalidatesAnAlreadyAgedResponse() {
+        QueueTransport transport = new QueueTransport(
+                aepResponse(200, Map.of("Cache-Control", List.of("max-age=60"), "Age", List.of("120")), discovery()),
+                aepResponse(200, identityList()),
+                aepResponse(200, discovery()),
+                aepResponse(200, identityList()));
+        PlatformIdentityProvider provider = provider(transport);
+        provider.findIdentityByServiceDid(SERVICE_DID).toCompletableFuture().join();
+        provider.findIdentityByServiceDid(SERVICE_DID).toCompletableFuture().join();
+        assertEquals(4, transport.requests.size());
+    }
+
+    @Test
     void rejectsCrossOriginDiscoveryRedirectsAndMismatchedSignResponses() {
         PlatformIdentityProvider redirecting =
                 provider(new QueueTransport(redirect("https://attacker.example/.well-known/aep-platform")));
@@ -209,6 +239,66 @@ class PlatformIdentityProviderTest {
                 CompletionException.class,
                 () -> identity.signer().sign(claims()).toCompletableFuture().join());
         assertEquals("platform_sign_invalid", ((AepAgentException) signFailure.getCause()).code());
+    }
+
+    @Test
+    void rejectsCompletedSigningWithWrongAgentJwtIdLifetimeOrHttpStatus() {
+        for (AepHttpTransport.Response response : List.of(
+                aepResponse(200, completedSign().replace(AGENT_DID, "did:web:other.example")),
+                aepResponse(200, completedSign().replace("01J0AEPASSERTION0000000001", "different-jwt")),
+                aepResponse(200, completedSign().replace("12:05:00Z", "12:06:00Z")),
+                aepResponse(202, completedSign()))) {
+            QueueTransport transport =
+                    new QueueTransport(aepResponse(200, discovery()), aepResponse(200, activeList()), response);
+            AgentIdentity identity = provider(transport)
+                    .getOrCreate(SERVICE, SERVICE_DID)
+                    .toCompletableFuture()
+                    .join();
+            CompletionException failure = assertThrows(
+                    CompletionException.class,
+                    () -> identity.signer().sign(claims()).toCompletableFuture().join());
+            assertEquals("platform_sign_invalid", ((AepAgentException) failure.getCause()).code());
+            assertEquals(3, transport.requests.size());
+        }
+    }
+
+    @Test
+    void encodesIdentityIdentifiersAsOnePathSegment() {
+        QueueTransport transport = new QueueTransport(
+                aepResponse(200, discovery()),
+                aepResponse(200, activeList().replace(IDENTITY_ID, "id/part ?#%é")),
+                aepResponse(200, completedSign()));
+        AgentIdentity identity = provider(transport)
+                .getOrCreate(SERVICE, SERVICE_DID)
+                .toCompletableFuture()
+                .join();
+        assertEquals(
+                "client-assertion",
+                identity.signer().sign(claims()).toCompletableFuture().join());
+        assertEquals(
+                URI.create("https://platform.example/v1/aep/agent-identities/id%2Fpart%20%3F%23%25%C3%A9/sign"),
+                transport.requests.get(2).uri());
+    }
+
+    @Test
+    void retriesDiscoveryAfterTransportFailureWithoutCachingTheFailure() {
+        CompletableFuture<AepHttpTransport.Response> failed = new CompletableFuture<>();
+        QueueTransport succeeding = new QueueTransport(aepResponse(200, discovery()), aepResponse(200, activeList()));
+        AtomicInteger attempts = new AtomicInteger();
+        PlatformIdentityProvider provider =
+                provider(request -> attempts.getAndIncrement() == 0 ? failed : succeeding.execute(request));
+        var first = provider.findIdentityByServiceDid(SERVICE_DID).toCompletableFuture();
+        IllegalStateException cause = new IllegalStateException("connection closed");
+        failed.completeExceptionally(new CompletionException(cause));
+        assertEquals(cause, assertThrows(CompletionException.class, first::join).getCause());
+        assertEquals(
+                AGENT_DID,
+                provider.findIdentityByServiceDid(SERVICE_DID)
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow()
+                        .agentDid());
+        assertEquals(3, attempts.get());
     }
 
     @Test
@@ -376,6 +466,19 @@ class PlatformIdentityProviderTest {
                         .toCompletableFuture()
                         .join());
         assertEquals("service_identity_mismatch", ((AepAgentException) bindingFailure.getCause()).code());
+        assertTrue(transport.requests.isEmpty());
+    }
+
+    @Test
+    void unsupportedServiceDidFailsBeforePlatformDiscovery() {
+        QueueTransport transport = new QueueTransport();
+        CompletionException failure = assertThrows(
+                CompletionException.class,
+                () -> provider(transport)
+                        .getOrCreate(URI.create("https://service.example"), "did:key:example")
+                        .toCompletableFuture()
+                        .join());
+        assertEquals("service_identity_mismatch", ((AepAgentException) failure.getCause()).code());
         assertTrue(transport.requests.isEmpty());
     }
 

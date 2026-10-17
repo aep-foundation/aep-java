@@ -13,6 +13,9 @@ See the root [installation guide](../README.md#installation) for dependency coor
 Supply an HTTP transport and an identity provider. The transport boundary is asynchronous and can
 adapt the HTTP client already used by the application. The identity provider returns a
 Service-scoped Agent identity whose signer receives the complete client-assertion claims.
+The signer must use an algorithm advertised by the Service. Configure transports to return
+redirect responses without following them automatically, so the SDK can enforce origin checks
+before credentials or assertions are sent elsewhere.
 
 ```java
 AepAgent agent = AepAgent.builder()
@@ -29,6 +32,15 @@ AepServiceSession service = agent.service(URI.create("https://service.example"))
 Production identity providers should scope identities by Service, protect signing keys, and return
 the same identity for repeated calls. Production credential stores should encrypt credentials at
 rest and make replacement, expiry, and revocation atomic.
+
+Implement `AgentCredentialStore.find(serviceDid, grantType, now)` to select a credential whose
+`expiresAt` is later than the supplied Agent time. An expired credential must not hide another
+usable credential of the same type. A custom credential with no expiry can remain selectable.
+This local selection does not authorize access: the Service validates the credential using its own
+clock. Changing the Agent's clock cannot extend a credential's lifetime at the Service.
+
+Custom Inspect caches must preserve `AgentInspectCache.Entry.cacheHeaders` alongside the document
+and validators, so a `304 Not Modified` response retains the cached freshness policy.
 
 ## Use a hosted identity Platform
 
@@ -77,8 +89,9 @@ ClaimValues claims = ClaimValues.builder()
     .build();
 
 EnrollResponse enrolled = service.enroll(claims).join();
-StatusResponse active = service.waitForActive(
-    Duration.ofSeconds(2), Duration.ofMinutes(2)).join();
+if (enrolled.status() == AgentStatus.PENDING) {
+    service.waitForActive(Duration.ofSeconds(2), Duration.ofMinutes(2)).join();
+}
 
 AgentGrantResult grant = service.grant("api-key", List.of("catalog:read")).join();
 ```
@@ -86,6 +99,10 @@ AgentGrantResult grant = service.grant("api-key", List.of("catalog:read")).join(
 `enroll` rejects locally when required advertised claims are missing. `waitForActive` is intended
 for a Service that returns a pending enrollment; an immediately active enrollment can proceed
 directly to Grant.
+
+Polling timeout and cancellation stop the returned wait and prevent further polls. They do not
+guarantee cancellation of an HTTP request already running in an application-supplied transport;
+configure request timeouts on that transport as well.
 
 Built-in credential handlers parse and store OAuth Bearer, API-key, and Basic responses. A custom
 Grant Type remains available through `AgentCredentialHandler`.
@@ -108,6 +125,13 @@ service.revoke(RevokeRequest.credential("api-key", credentialId)).join();
 Do not forward the returned headers to another origin. The Agent refuses cross-origin credential
 presentation, command redirects, cross-origin Inspect redirects, oversized responses, and invalid
 Service DID bindings.
+
+The application sends protected-resource requests and handles their redirects; `authenticate`
+only returns headers. For a same-origin redirect, discard the previous authentication headers and
+call `authenticate` for the target URL. When JWT authentication is selected, this creates a fresh
+assertion bound to that URL. For a cross-origin
+redirect, remove all Service authentication headers, including any API-key header, and restart
+anonymously. These forwarding decisions belong to the application's HTTP client, not this SDK.
 
 See the runnable [Agent and Service example](../examples/README.md#agent-and-service) for a complete
 JDK `HttpClient` transport and lifecycle flow.

@@ -29,6 +29,7 @@ import java.util.Map;
 import java.util.Set;
 
 final class SharedConformance {
+    private static final String AEP_SCHEME = "aepScheme";
     private static final Set<String> CLAIM_VALUE_VECTORS = Set.of(
             "forward-compatible-address",
             "invalid-address",
@@ -213,9 +214,14 @@ final class SharedConformance {
         return parsed == expectedValid;
     }
 
+    /**
+     * Parsing and discarding the result returned true for any input the parser merely tolerated. The
+     * parsed value is written back out and compared to the vector, so a parser that dropped or
+     * renamed a member now fails.
+     */
     private static boolean parseInput(AdapterRequest request, java.util.function.Function<String, ?> parser) {
-        parser.apply(request.testCase().input().toString());
-        return true;
+        Object parsed = parser.apply(request.testCase().input().toString());
+        return ConformanceSupport.preserves(parsed, request.testCase().input());
     }
 
     private static boolean enrollRequest(AdapterRequest request) {
@@ -257,9 +263,16 @@ final class SharedConformance {
         return true;
     }
 
+    /**
+     * The expected document is the Inspect document the Service publishes. Parsing it and returning
+     * true accepted any document the parser did not throw on, including one it had silently emptied;
+     * the parsed document is validated and written back out for comparison instead.
+     */
     private static boolean inspectExpected(AdapterRequest request) {
-        AepJson.parseInspectDocument(request.testCase().expected().toString());
-        return true;
+        InspectDocument document =
+                AepJson.parseInspectDocument(request.testCase().expected().toString());
+        return AepValidation.inspectDocument(document).isEmpty()
+                && ConformanceSupport.preserves(document, request.testCase().expected());
     }
 
     private static boolean defaultEndpointBase(AdapterRequest request) {
@@ -288,6 +301,11 @@ final class SharedConformance {
                 : ConformanceSupport.text(request.testCase().input(), "matching_service_did");
         URI document = foundation.aep.core.DidWeb.documentUri(did, false);
         return "https".equals(document.getScheme())
+                && (!request.testCase().input().has("inspect_url")
+                        || foundation.aep.core.DidWeb.bindsOrigin(
+                                did,
+                                URI.create(ConformanceSupport.text(
+                                        request.testCase().input(), "inspect_url"))))
                 && (!request.testCase().expected().has("document_url")
                         || document.toString()
                                 .equals(ConformanceSupport.text(
@@ -404,11 +422,59 @@ final class SharedConformance {
         }
     }
 
+    /**
+     * expected names the disposition each of the six inheritance shapes resolves to, and every one
+     * is put to {@link AepOpenApi#resolveSecurity} (CORE-OAS-011/013/014/015).
+     */
     private static boolean openApiSecurity(AdapterRequest request) {
         OpenApiAepSecurityScheme scheme = AepJson.parseOpenApiSecurityScheme(
                 ConformanceSupport.required(request.testCase().input(), "security_scheme")
                         .toString());
-        return Aep.AUTHENTICATION_METHOD_JWT.equals(scheme.authenticationMethod());
+        if (!Aep.AUTHENTICATION_METHOD_JWT.equals(scheme.authenticationMethod())) return false;
+        List<Map<String, List<String>>> root = List.of(Map.of(AEP_SCHEME, List.of()));
+        List<String> supported = List.of(AEP_SCHEME, "apiKeyScheme");
+        JsonNode expected = request.testCase().expected();
+        // An operation that omits `security` inherits the root value rather than becoming public.
+        if (!resolves(expected, "root_inherited", root, null, supported)) return false;
+        // An empty array at the operation replaces the root requirement and opens the operation.
+        if (!resolves(expected, "operation_empty_array", root, List.of(), supported)) return false;
+        // An empty requirement object is one alternative, so anonymous access is permitted.
+        if (!resolves(
+                expected,
+                "empty_requirement_alternative",
+                root,
+                List.of(Map.of(), Map.of(AEP_SCHEME, List.of())),
+                supported)) return false;
+        // Several requirement objects are alternatives, any one of which suffices.
+        if (!resolves(
+                expected,
+                "multiple_objects",
+                root,
+                List.of(Map.of(AEP_SCHEME, List.of()), Map.of("apiKeyScheme", List.of())),
+                supported)) return false;
+        // Several schemes in one object are compound: all of them must be presented together.
+        if (!resolves(
+                expected,
+                "multiple_schemes_one_object",
+                root,
+                List.of(Map.of(AEP_SCHEME, List.of(), "apiKeyScheme", List.of())),
+                supported)) return false;
+        // CORE-OAS-013: a compound requirement with an unsatisfiable member is unsupported as a
+        // whole, and CORE-OAS-015: it must not be reduced to the member the Agent does support.
+        List<Map<String, List<String>>> compound = List.of(Map.of(AEP_SCHEME, List.of(), "mtlsScheme", List.of()));
+        AepOpenApi.SecurityResolution unsupported = AepOpenApi.resolveSecurity(root, compound, supported);
+        return unsupported.satisfiable().isEmpty()
+                && unsupported.disposition().value().equals(ConformanceSupport.text(expected, "unsupported_compound"));
+    }
+
+    private static boolean resolves(
+            JsonNode expected,
+            String field,
+            List<Map<String, List<String>>> root,
+            List<Map<String, List<String>>> operation,
+            List<String> supported) {
+        AepOpenApi.SecurityResolution resolution = AepOpenApi.resolveSecurity(root, operation, supported);
+        return resolution.disposition().value().equals(ConformanceSupport.text(expected, field));
     }
 
     private static boolean openApiUrl(AdapterRequest request) {

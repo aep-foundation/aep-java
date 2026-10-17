@@ -87,9 +87,11 @@ public interface IdempotencyStore {
             destination.complete(response);
         }
 
+        // A record whose age is exactly the retention window is still inside it, so an exact retry at
+        // the one-hour boundary has to replay the stored result rather than re-run the operation.
         private synchronized void expire() {
             Instant cutoff = clock.instant().minus(RETENTION);
-            entries.values().removeIf(entry -> !entry.createdAt.isAfter(cutoff));
+            entries.values().removeIf(entry -> entry.createdAt.isBefore(cutoff));
         }
 
         @SuppressWarnings("unchecked")

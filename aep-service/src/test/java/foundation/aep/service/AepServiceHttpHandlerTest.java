@@ -82,7 +82,7 @@ final class AepServiceHttpHandlerTest {
                 request("POST", "/aep/enroll", Map.of("Content-Type", List.of("application/json")), new byte[0])));
 
         assertEquals(405, method.status());
-        assertEquals(List.of("GET"), method.headers().get("Allow"));
+        assertEquals(List.of("GET, HEAD"), method.headers().get("Allow"));
         assertEquals(415, contentType.status());
     }
 
@@ -156,6 +156,27 @@ final class AepServiceHttpHandlerTest {
         assertThrows(
                 IllegalArgumentException.class,
                 () -> AepHttpRequest.publicUrl(URI.create("mailto:service@example.com"), "/orders/1", null));
+    }
+
+    @Test
+    void preservesRawRequestTargetsWithoutAcceptingNewUriComponents() {
+        URI origin = URI.create("https://[::1]:8443/");
+        for (String path : List.of("/objects/a%2Fb", "/%252e%252e", "/a%3Fb%23c", "/a+b")) {
+            for (String query : List.of("", "filter=c%2Fd", "next=https://other.example/path?x=1")) {
+                URI result = AepHttpRequest.publicUrl(origin, path, query);
+                assertEquals("[::1]:8443", result.getRawAuthority());
+                assertEquals(path, result.getRawPath());
+                assertEquals(query, result.getRawQuery());
+                assertNull(result.getRawFragment());
+            }
+        }
+        assertNull(AepHttpRequest.publicUrl(origin, "/", null).getRawQuery());
+        for (String path : List.of("//other.example/x", "/x?injected", "/x#fragment", "/%ZZ", "/has space")) {
+            assertThrows(IllegalArgumentException.class, () -> AepHttpRequest.publicUrl(origin, path, null));
+        }
+        for (String query : List.of("x#fragment", "%ZZ", "x\r\nInjected: header")) {
+            assertThrows(IllegalArgumentException.class, () -> AepHttpRequest.publicUrl(origin, "/x", query));
+        }
     }
 
     private static AepServiceHttpHandler handler() {

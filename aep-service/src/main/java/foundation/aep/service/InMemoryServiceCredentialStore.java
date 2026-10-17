@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -22,6 +23,7 @@ import java.util.concurrent.CompletionStage;
 
 final class InMemoryServiceCredentialStore implements ServiceCredentialStore {
     private static final int SINGLE_PRESENTATION = 1;
+    private static final String AUTHORIZATION = "Authorization";
     private final Map<String, StoredRecord> records = new LinkedHashMap<>();
 
     @Override
@@ -29,11 +31,10 @@ final class InMemoryServiceCredentialStore implements ServiceCredentialStore {
             String grantType, CredentialAuthenticationInput input) {
         List<Presentation> presentations = presentations(grantType, input.headers());
         if (Aep.GRANT_TYPE_API_KEY.equals(grantType)) {
-            records.values().stream()
-                    .filter(record -> grantType.equals(record.grantType()))
-                    .map(StoredRecord::header)
-                    .distinct()
-                    .forEach(header -> presentations.addAll(apiKeyPresentations(input.headers(), header)));
+            // Header names are case-insensitive on the wire (APK-CFG-003), so two records spelling
+            // the same header differently name one field. Deduplicating on the raw spelling harvested
+            // that one field twice and tipped every API key into the ambiguity branch below.
+            apiKeyHeaders().forEach(header -> presentations.addAll(apiKeyPresentations(input.headers(), header)));
         }
         if (presentations.size() != SINGLE_PRESENTATION) {
             return completed(Optional.empty());
@@ -63,10 +64,9 @@ final class InMemoryServiceCredentialStore implements ServiceCredentialStore {
         if (!Aep.GRANT_TYPE_API_KEY.equals(grantType)) {
             return completed(!presentations(grantType, input.headers()).isEmpty());
         }
-        boolean present = records.values().stream()
-                .filter(record -> grantType.equals(record.grantType()))
-                .map(StoredRecord::header)
-                .anyMatch(header -> !headerValues(input.headers(), header).isEmpty());
+        Map<String, List<String>> headers = input.headers();
+        boolean present = apiKeyHeaders().stream()
+                .anyMatch(header -> !headerValues(headers, header).isEmpty());
         return completed(present);
     }
 
@@ -107,6 +107,7 @@ final class InMemoryServiceCredentialStore implements ServiceCredentialStore {
         } catch (RuntimeException exception) {
             return CompletableFuture.failedFuture(exception);
         }
+        // Expired and revoked identifiers remain reserved: AEP forbids reassignment.
         if (records.containsKey(record.credentialId())) {
             return CompletableFuture.failedFuture(
                     new IllegalArgumentException("AEP credential identifier has already been issued."));
@@ -135,15 +136,17 @@ final class InMemoryServiceCredentialStore implements ServiceCredentialStore {
             throw new IllegalArgumentException("AEP credential store received an invalid record.");
         }
         if (credential instanceof GrantResponses.OAuthBearer bearer) {
-            return record(record, "Authorization", bearer.accessToken(), bearer.scopes());
+            return record(record, AUTHORIZATION, bearer.accessToken(), bearer.scopes());
         }
         if (credential instanceof GrantResponses.ApiKey apiKey) {
-            return record(record, apiKey.header(), apiKey.apiKey(), apiKey.scopes());
+            // APK-CFG-003 asks Services to publish lowercase header names, and the wire comparison is
+            // case-insensitive either way, so one canonical spelling is what gets stored.
+            return record(record, apiKey.header().toLowerCase(Locale.ROOT), apiKey.apiKey(), apiKey.scopes());
         }
         if (credential instanceof GrantResponses.Basic basic) {
             String plain = basic.username() + ':' + basic.password();
             String encoded = Base64.getEncoder().encodeToString(plain.getBytes(StandardCharsets.UTF_8));
-            return record(record, "Authorization", encoded, basic.scopes());
+            return record(record, AUTHORIZATION, encoded, basic.scopes());
         }
         throw new IllegalArgumentException("AEP credential store requires a built-in credential.");
     }
@@ -161,27 +164,43 @@ final class InMemoryServiceCredentialStore implements ServiceCredentialStore {
                 digest(secret));
     }
 
+    private synchronized List<String> apiKeyHeaders() {
+        return records.values().stream()
+                .filter(record -> Aep.GRANT_TYPE_API_KEY.equals(record.grantType()))
+                .map(StoredRecord::header)
+                .distinct()
+                .toList();
+    }
+
     private static List<Presentation> presentations(String grantType, Map<String, List<String>> headers) {
         if (Aep.GRANT_TYPE_API_KEY.equals(grantType)) return new ArrayList<>();
         AuthorizationScheme expected =
                 Aep.GRANT_TYPE_BASIC.equals(grantType) ? AuthorizationScheme.BASIC : AuthorizationScheme.BEARER;
         List<Presentation> result = new ArrayList<>();
-        addAuthorizationPresentations(result, headers, "Authorization", AuthorizationCarrier.STANDARD, expected);
+        addAuthorizationPresentations(result, headers, AUTHORIZATION, AuthorizationCarrier.STANDARD, expected);
         addAuthorizationPresentations(
                 result, headers, Aep.AUTHORIZATION_HEADER, AuthorizationCarrier.DEDICATED, expected);
         return result;
     }
 
+    // OAB-PRS-003 and BSC-PRS-003 make both carriers acceptable on a protected resource, and
+    // OAB-PRS-002/BSC-PRS-002 keep the field value identical between them: only the field the value
+    // travels in changes. Bearer and Basic records are stored under the canonical Authorization slot,
+    // so a presentation is filed there whichever carrier delivered it. Filing it under the request
+    // field name instead meant an AEP-Authorization credential matched no record and every
+    // dedicated-carrier request came back not_recognized.
     private static void addAuthorizationPresentations(
             List<Presentation> result,
             Map<String, List<String>> headers,
-            String header,
+            String field,
             AuthorizationCarrier carrier,
             AuthorizationScheme expected) {
-        for (String value : headerValues(headers, header)) {
+        for (String value : headerValues(headers, field)) {
             try {
                 ProtectedResourceAuthorization parsed = AepHttp.parseAuthorization(value, carrier);
-                if (parsed.scheme() == expected) result.add(new Presentation(header, parsed.credentials()));
+                if (parsed.scheme() == expected) {
+                    result.add(new Presentation(AUTHORIZATION, parsed.credentials()));
+                }
             } catch (IllegalArgumentException ignored) {
                 // Another authentication method owns unrecognized field values.
             }

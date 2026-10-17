@@ -82,9 +82,9 @@ final class AepHttpTest {
                 () -> AepHttp.parseAuthorization("Unknown credential", AuthorizationCarrier.STANDARD));
         assertThrows(
                 AepAuthorizationException.class,
-                () -> AepHttp.parseAuthorization("Bearer  credential", AuthorizationCarrier.STANDARD));
+                () -> AepHttp.parseAuthorization("Bearer", AuthorizationCarrier.STANDARD));
         assertThrows(
                 AepAuthorizationException.class,
-                () -> AepHttp.parseAuthorization("Bearer", AuthorizationCarrier.STANDARD));
+                () -> AepHttp.parseAuthorization("Bearer   ", AuthorizationCarrier.STANDARD));
     }
 }

@@ -131,7 +131,7 @@ public interface PlatformIdentityStore {
 
         private synchronized CompletionStage<Optional<PlatformIdentityRecord>> find(String identityId) {
             return CompletableFuture.completedFuture(
-                    identityId == null ? Optional.empty() : Optional.of(records.get(identityId)));
+                    identityId == null ? Optional.empty() : Optional.ofNullable(records.get(identityId)));
         }
 
         private synchronized void complete(

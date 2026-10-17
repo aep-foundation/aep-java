@@ -51,14 +51,14 @@ public record AepHttpRequest(String method, URI url, Map<String, List<String>> h
             throw new IllegalArgumentException("rawPath must be an absolute path.");
         }
         try {
-            return new URI(
-                    publicOrigin.getScheme(),
-                    null,
-                    publicOrigin.getHost(),
-                    publicOrigin.getPort(),
-                    rawPath,
-                    rawQuery,
-                    null);
+            URI result = new URI(publicOrigin.getScheme() + "://" + publicOrigin.getRawAuthority() + rawPath
+                    + (rawQuery == null ? "" : "?" + rawQuery));
+            if (!rawPath.equals(result.getRawPath())
+                    || !Objects.equals(rawQuery, result.getRawQuery())
+                    || result.getRawFragment() != null) {
+                throw new IllegalArgumentException("Request target is invalid.");
+            }
+            return result;
         } catch (URISyntaxException exception) {
             throw new IllegalArgumentException("Request target is invalid.", exception);
         }

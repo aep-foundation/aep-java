@@ -44,7 +44,7 @@ public final class AepAuthenticationFilter implements Filter {
             request.setAttribute(PRINCIPAL_ATTRIBUTE, result.principal());
             chain.doFilter(request, response);
         } else {
-            AepServletSupport.write(response, result.response());
+            AepServletSupport.write(request, response, result.response());
         }
     }
 }

@@ -39,7 +39,7 @@ final class AepSpringWebMvcTest {
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("\"aep_version\"")));
         client.perform(post(Aep.WELL_KNOWN_PATH))
                 .andExpect(status().isMethodNotAllowed())
-                .andExpect(header().string("Allow", "GET"));
+                .andExpect(header().string("Allow", "GET, HEAD"));
     }
 
     @Test

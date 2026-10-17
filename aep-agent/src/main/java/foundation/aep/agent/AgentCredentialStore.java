@@ -1,5 +1,6 @@
 package foundation.aep.agent;
 
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -7,7 +8,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 public interface AgentCredentialStore {
-    CompletionStage<Optional<AgentCredential>> find(String serviceDid, String grantType);
+    /** Selects a credential unexpired at the Agent's time; the Service independently validates it. */
+    CompletionStage<Optional<AgentCredential>> find(String serviceDid, String grantType, Instant now);
 
     CompletionStage<Void> save(AgentCredential credential);
 
@@ -22,11 +24,14 @@ public interface AgentCredentialStore {
             private final Map<String, AgentCredential> credentials = new LinkedHashMap<>();
 
             @Override
-            public synchronized CompletionStage<Optional<AgentCredential>> find(String serviceDid, String grantType) {
+            public synchronized CompletionStage<Optional<AgentCredential>> find(
+                    String serviceDid, String grantType, Instant now) {
                 AgentCredential selected = null;
                 for (AgentCredential credential : credentials.values()) {
                     if (credential.serviceDid().equals(serviceDid)
-                            && credential.grantType().equals(grantType)) {
+                            && credential.grantType().equals(grantType)
+                            && (credential.expiresAt() == null
+                                    || credential.expiresAt().isAfter(now))) {
                         selected = credential;
                     }
                 }

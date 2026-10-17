@@ -36,7 +36,9 @@ AEP_NODE_DIR=../aep-node make interoperability
 ```
 
 The flow runs the Java Agent against the Node.js Service and Platform, then the Node.js Agent
-against the Java Service and Platform. Its report is written under `.interop/reports/`.
+against the Java Service and Platform. It also tests Java Service hosted verification against the
+Node.js Platform, including retries, forged assertions, resource binding, and replay rejection.
+Its report is written under `.interop/reports/`.
 
 ## Module boundaries
 

@@ -7,6 +7,7 @@ import foundation.aep.core.GrantRequest;
 import foundation.aep.core.GrantResponses;
 import foundation.aep.core.InspectDocument;
 import foundation.aep.core.RevokeRequest;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.Objects;
@@ -80,7 +81,9 @@ public final class StoredCredentialGrantTypes {
 
         @Override
         public CompletionStage<Void> revoke(RevokeRequest request, RevokeContext context) {
-            if (request.credentialId() != null) {
+            // A blank identifier names no credential. Treating it as a targeted revoke quietly
+            // revoked nothing while the Agent was told its request had succeeded.
+            if (request.credentialId() != null && !request.credentialId().isBlank()) {
                 return store.revoke(context.agentDid(), grantType, request.credentialId(), context.now());
             }
             return store.revokeGrantType(context.agentDid(), grantType, context.now());
@@ -114,8 +117,18 @@ public final class StoredCredentialGrantTypes {
         }
 
         private void requireIssuedCredential(T credential, Instant issuedAt) {
+            // AepValidation dispatches on the credential's runtime type, so it would happily accept
+            // an OAuth bearer response from a handler registered as api-key. Unchecked generics are
+            // all it takes to get there, and the mismatch would otherwise surface deep in the store.
+            if (!grantType.equals(credentialGrantType(credential))) {
+                throw new IllegalArgumentException("AEP issuer returned a credential for another Grant Type.");
+            }
             if (!AepValidation.grantResponse(credential).isEmpty()) {
                 throw new IllegalArgumentException("AEP issuer returned an invalid Grant response.");
+            }
+            if (credential instanceof GrantResponses.Basic basic && !isEncodableAsBasic(basic)) {
+                throw new IllegalArgumentException(
+                        "AEP issued Basic credentials must survive RFC 7617 encoding unchanged.");
             }
             Instant expiresAt;
             try {
@@ -133,6 +146,18 @@ public final class StoredCredentialGrantTypes {
                     && config.headerNames().stream().noneMatch(header -> header.equalsIgnoreCase(apiKey.header()))) {
                 throw new IllegalArgumentException("AEP issued API-key header is not advertised by the Service.");
             }
+        }
+
+        private static String credentialGrantType(GrantResponses.BuiltIn credential) {
+            if (credential instanceof GrantResponses.OAuthBearer) return Aep.GRANT_TYPE_OAUTH_BEARER;
+            if (credential instanceof GrantResponses.ApiKey) return Aep.GRANT_TYPE_API_KEY;
+            if (credential instanceof GrantResponses.Basic) return Aep.GRANT_TYPE_BASIC;
+            return "";
+        }
+
+        private static boolean isEncodableAsBasic(GrantResponses.Basic basic) {
+            var encoder = StandardCharsets.UTF_8.newEncoder();
+            return encoder.canEncode(basic.username()) && encoder.canEncode(basic.password());
         }
 
         private ServiceCredentialRecord credentialRecord(T credential, GrantContext context) {

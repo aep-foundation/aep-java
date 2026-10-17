@@ -38,6 +38,7 @@ public final class AepServiceSession {
     private final AepAgent agent;
     private final URI serviceOrigin;
     private Optional<CompletableFuture<AgentInspection>> inspectionInFlight = Optional.empty();
+    private volatile Optional<EnrollmentIdentity> activeEnrollment = Optional.empty();
 
     AepServiceSession(AepAgent agent, URI origin) {
         this.agent = agent;
@@ -66,20 +67,34 @@ public final class AepServiceSession {
             String key = idempotencyKey(context, AepCommand.ENROLL, "");
             EnrollRequest request = new EnrollRequest(context.identity.did(), claims, key);
             requireValid("Enroll request", AepValidation.enrollRequest(request));
-            return execute(context, AepCommand.ENROLL, "POST", request, key, AepJson::parseEnrollResponse);
+            return execute(context, AepCommand.ENROLL, "POST", request, key, AepJson::parseEnrollResponse)
+                    .thenApply(response -> {
+                        recordEnrollment(context, response.status());
+                        return response;
+                    });
         });
     }
 
     public CompletableFuture<StatusResponse> status() {
         return commandContext(AepCommand.STATUS)
-                .thenCompose(context ->
-                        execute(context, AepCommand.STATUS, "GET", null, null, AepJson::parseStatusResponse));
+                .thenCompose(context -> execute(
+                                context, AepCommand.STATUS, "GET", null, null, AepJson::parseStatusResponse)
+                        .thenApply(response -> {
+                            recordEnrollment(context, response.status());
+                            return response;
+                        }));
     }
 
     public CompletableFuture<StatusResponse> waitForActive(Duration interval, Duration timeout) {
         requirePositive(interval, "interval");
         requirePositive(timeout, "timeout");
         CompletableFuture<StatusResponse> result = new CompletableFuture<>();
+        CompletableFuture<Void> deadline = new CompletableFuture<>();
+        deadline.orTimeout(timeoutNanos(timeout), TimeUnit.NANOSECONDS).whenComplete((ignored, failure) -> {
+            if (failure != null)
+                result.completeExceptionally(new AepAgentException("poll_timeout", "AEP Status polling timed out"));
+        });
+        result.whenComplete((ignored, failure) -> deadline.complete(null));
         pollStatus(result, interval, System.nanoTime(), timeoutNanos(timeout));
         return result;
     }
@@ -98,8 +113,9 @@ public final class AepServiceSession {
                         "grant_type_not_advertised",
                         "AEP Service does not advertise Grant Type " + request.grantType());
             }
-            if (!commands.supported().contains(AepCommand.STATUS.value())) {
-                return failed("command_not_advertised", "AEP Grant requires advertised Status support");
+            if (activeEnrollment.filter(enrollmentIdentity(context)::equals).isPresent()
+                    || !commands.supported().contains(AepCommand.STATUS.value())) {
+                return issueGrant(context, request);
             }
             return execute(context, AepCommand.STATUS, "GET", null, null, AepJson::parseStatusResponse)
                     .thenCompose(status -> grantActive(context, status, request));
@@ -110,6 +126,12 @@ public final class AepServiceSession {
         Objects.requireNonNull(request, "request");
         requireValid("Revoke request", AepValidation.revokeRequest(request));
         return commandContext(AepCommand.REVOKE).thenCompose(context -> {
+            if (request.grantType() != null
+                    && !context.inspection.document().commands().grantTypes().contains(request.grantType())) {
+                return failed(
+                        "grant_type_not_advertised",
+                        "AEP Service does not advertise Grant Type " + request.grantType());
+            }
             requirePerCredentialRevoke(context.inspection.document(), request);
             String discriminator = request.credentialId() == null ? request.grantType() : request.credentialId();
             String key = idempotencyKey(context, AepCommand.REVOKE, discriminator == null ? "all" : discriminator);
@@ -159,13 +181,15 @@ public final class AepServiceSession {
             }
             if (response.status() == 304 && cached.isPresent()) {
                 AgentInspectCache.Entry prior = cached.orElseThrow();
+                AepHttpTransport.Response metadata = AgentHttp.revalidated(response, prior.cacheHeaders());
                 AgentInspectCache.Entry refreshed = new AgentInspectCache.Entry(
                         uri,
                         prior.json(),
                         AgentHttp.header(response, "ETag").orElse(prior.etag()),
                         AgentHttp.header(response, "Last-Modified").orElse(prior.lastModified()),
-                        AgentHttp.expiresAt(response, agent.clock.instant(), agent.defaultInspectFreshness));
-                CompletionStage<Void> update = AgentHttp.isNoStore(response)
+                        AgentHttp.expiresAt(metadata, agent.clock.instant(), agent.defaultInspectFreshness),
+                        AgentHttp.cacheHeaders(metadata));
+                CompletionStage<Void> update = AgentHttp.isNoStore(metadata)
                         ? agent.inspectCache.delete(serviceOrigin)
                         : agent.inspectCache.put(serviceOrigin, refreshed);
                 return future(update).thenApply(ignored -> parseInspection(prior.json(), uri));
@@ -181,7 +205,8 @@ public final class AepServiceSession {
                     json,
                     AgentHttp.header(response, "ETag").orElse(null),
                     AgentHttp.header(response, "Last-Modified").orElse(null),
-                    AgentHttp.expiresAt(response, agent.clock.instant(), agent.defaultInspectFreshness));
+                    AgentHttp.expiresAt(response, agent.clock.instant(), agent.defaultInspectFreshness),
+                    AgentHttp.cacheHeaders(response));
             CompletionStage<Void> update = AgentHttp.isNoStore(response)
                     ? agent.inspectCache.delete(serviceOrigin)
                     : agent.inspectCache.put(serviceOrigin, entry);
@@ -235,10 +260,8 @@ public final class AepServiceSession {
     }
 
     private boolean bindsServiceDid(String serviceDid) {
-        if (!agent.allowInsecureLoopback) {
-            return DidWeb.bindsOrigin(serviceDid, serviceOrigin);
-        }
         try {
+            if (!agent.allowInsecureLoopback) return DidWeb.bindsOrigin(serviceDid, serviceOrigin);
             return AgentHttp.sameOrigin(DidWeb.documentUri(serviceDid, true), serviceOrigin);
         } catch (IllegalArgumentException exception) {
             return false;
@@ -310,20 +333,38 @@ public final class AepServiceSession {
 
     private CompletableFuture<AgentGrantResult> grantActive(
             CommandContext context, StatusResponse status, GrantRequest request) {
+        recordEnrollment(context, status.status());
         if (status.status() != AgentStatus.ACTIVE) {
             return failed("enrollment_not_active", "AEP Grant requires active enrollment");
         }
+        return issueGrant(context, request);
+    }
+
+    private void recordEnrollment(CommandContext context, AgentStatus status) {
+        activeEnrollment = status == AgentStatus.ACTIVE ? Optional.of(enrollmentIdentity(context)) : Optional.empty();
+    }
+
+    private static EnrollmentIdentity enrollmentIdentity(CommandContext context) {
+        return new EnrollmentIdentity(context.inspection.document().service().did(), context.identity.did());
+    }
+
+    private record EnrollmentIdentity(String serviceDid, String agentDid) {}
+
+    private CompletableFuture<AgentGrantResult> issueGrant(CommandContext context, GrantRequest request) {
         String key = idempotencyKey(context, AepCommand.GRANT, request.grantType());
         return execute(context, AepCommand.GRANT, "POST", request, key, Function.identity())
                 .thenCompose(json -> storeGrant(context, request.grantType(), json));
     }
 
     private CompletableFuture<AgentGrantResult> storeGrant(CommandContext context, String grantType, String json) {
+        Object identifier = AepJson.parseObject(json, "Grant response").get("credential_id");
+        if (!(identifier instanceof String credentialId) || credentialId.isEmpty()) {
+            return failed("invalid_credential", "Grant response must contain a non-empty credential_id");
+        }
         Optional<AgentCredentialHandler> handler = agent.credentialHandlers.stream()
                 .filter(candidate -> candidate.grantType().equals(grantType))
                 .findFirst();
         if (handler.isEmpty()) {
-            AepJson.requireObject(json, "Grant response");
             return CompletableFuture.completedFuture(new AgentGrantResult(grantType, json, Optional.empty()));
         }
         AgentCredential credential = handler.orElseThrow()
@@ -331,7 +372,8 @@ public final class AepServiceSession {
         if (!credential
                         .serviceDid()
                         .equals(context.inspection.document().service().did())
-                || !credential.grantType().equals(grantType)) {
+                || !credential.grantType().equals(grantType)
+                || !credential.credentialId().equals(credentialId)) {
             return failed("invalid_credential", "Credential handler returned mismatched credential metadata");
         }
         return future(agent.credentialStore.save(credential))
@@ -375,7 +417,8 @@ public final class AepServiceSession {
             return authenticate(inspection, resource, methodIndex + 1);
         }
         AgentCredentialHandler selected = handler.orElseThrow();
-        return future(agent.credentialStore.find(inspection.document().service().did(), selected.grantType()))
+        return future(agent.credentialStore.find(
+                        inspection.document().service().did(), selected.grantType(), agent.clock.instant()))
                 .thenCompose(credential -> {
                     if (credential.isEmpty()
                             || (credential.orElseThrow().expiresAt() != null
@@ -400,6 +443,10 @@ public final class AepServiceSession {
         if (result.isDone()) {
             return;
         }
+        if (remainingNanos(startedNanos, timeoutNanos) == 0) {
+            result.completeExceptionally(new AepAgentException("poll_timeout", "AEP Status polling timed out"));
+            return;
+        }
         status().whenComplete((status, failure) -> {
             if (result.isDone()) {
                 return;
@@ -420,13 +467,11 @@ public final class AepServiceSession {
                         "AEP enrollment is " + status.status().value()));
                 return;
             }
-            if (remainingNanos(startedNanos, timeoutNanos) <= timeoutNanos(interval)) {
-                result.completeExceptionally(new AepAgentException("poll_timeout", "AEP Status polling timed out"));
-                return;
-            }
             CompletableFuture.runAsync(
                     () -> pollStatus(result, interval, startedNanos, timeoutNanos),
-                    CompletableFuture.delayedExecutor(delayMillis(interval), TimeUnit.MILLISECONDS));
+                    CompletableFuture.delayedExecutor(
+                            Math.min(remainingNanos(startedNanos, timeoutNanos), timeoutNanos(interval)),
+                            TimeUnit.NANOSECONDS));
         });
     }
 
@@ -455,7 +500,7 @@ public final class AepServiceSession {
     }
 
     private String idempotencyKey(CommandContext context, AepCommand command, String discriminator) {
-        return requireNonBlank(
+        return AgentHttp.requireFieldValue(
                 agent.idempotencyKeyProvider.keyFor(
                         context.inspection.document().service().did(), command, discriminator),
                 "idempotency key");
@@ -507,14 +552,6 @@ public final class AepServiceSession {
     private static long timeoutNanos(Duration timeout) {
         try {
             return timeout.toNanos();
-        } catch (ArithmeticException exception) {
-            return Long.MAX_VALUE;
-        }
-    }
-
-    private static long delayMillis(Duration duration) {
-        try {
-            return Math.max(1, duration.toMillis());
         } catch (ArithmeticException exception) {
             return Long.MAX_VALUE;
         }
