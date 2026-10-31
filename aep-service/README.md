@@ -126,6 +126,47 @@ Production stores implement `ServiceCredentialStore` with durable, atomic identi
 authentication, expiry, and revocation. Custom Grant Types continue to use `GrantTypeDefinition`
 and `CredentialAuthenticator` directly.
 
+## Repeated enrollment decisions
+
+Valid Enroll requests evaluate the enrollment policy, including requests for an existing Agent.
+Policies consult their own authoritative storage when deciding whether to accept an update.
+Accepted updates merge supplied claims while preserving identity, creation time, lifecycle status,
+and issued credentials. A rejected decision leaves the stored enrollment unchanged;
+`updateExisting=false` returns it unchanged.
+
+In `EnrollmentDecision`, `ownerActionRequired`, `requirementsPending`, and `verificationPending`
+are optional: `null` preserves the stored value on a repeat, and defaults to `false` or an empty
+list on initial enrollment. An explicit boolean or list replaces the value, including `false`
+and an empty list. Stored enrollment records retain concrete values.
+
+## Service documents
+
+Include `ServiceDocuments.EXTENSION` in `InspectDocument.Extensions.supported` and supply the
+document list through `InspectDocument.Builder.serviceDocuments`:
+
+```java
+.extensions(new InspectDocument.Extensions(List.of(ServiceDocuments.EXTENSION)))
+.serviceDocuments(List.of(new ServiceDocument(
+    "general-terms", "terms_of_service", "General terms", "required",
+    List.of(new ServiceDocument.Representation("text/html", "https://service.example/legal/terms")))))
+```
+
+The catalog permits seven documents with IDs of at most 32 ASCII characters. Each descriptor
+requires an HTTPS HTML link. Document types are open; `ServiceDocuments.preferredTypes()` exposes
+the conventional names. Omit the catalog when there are no documents. Extension advertisement
+without a catalog still supports acknowledgement declarations.
+
+Durable enrollment stores must persist `acknowledgedDocumentIds` and `requiredDocumentIds`.
+The latter lets the Service request renewed acceptance of an existing ID. Repeated Enroll merges
+accepted IDs without clearing earlier acknowledgements by omission or an empty declaration.
+Unknown IDs do not satisfy another requirement. Responses echo only the current declaration.
+
+The Service accepts otherwise valid partial declarations without adding IDs to the Owner's decision.
+Grant checks required claims and document acknowledgements before issuing credentials. Unmet document
+requirements return HTTP 422 with `requirements_unmet`, `service_documents` in `requirements_pending`,
+and the missing `required_document_ids`. Same-key retries replay their original result; a separate
+explicit update uses a new key. The Service owns its notification and document-change policy.
+
 ## Advertise and enforce claims
 
 The three claim lists in the Inspect document communicate how the Service uses Agent-provided
@@ -135,7 +176,8 @@ values:
 - `preferred` values improve the Service experience but do not block enrollment;
 - `optional` values are accepted but are not needed for enrollment.
 
-`AepService` checks required advertised values before invoking the enrollment policy. The policy
+Initial enrollment checks required advertised values before invoking the enrollment policy.
+Accepted repeated enrollment checks the combined stored and supplied claims. The policy
 can return additional `requirementsPending` or `verificationPending` values when an application
 workflow needs owner action or independent verification. Applications should persist only claims
 needed for their stated purpose and apply their own retention controls.

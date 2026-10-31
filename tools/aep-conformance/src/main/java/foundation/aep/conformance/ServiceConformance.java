@@ -17,6 +17,8 @@ import foundation.aep.service.AepService;
 import foundation.aep.service.AepServiceHttpHandler;
 import foundation.aep.service.CommandOptions;
 import foundation.aep.service.EnrollmentDecision;
+import foundation.aep.service.EnrollmentRecord;
+import foundation.aep.service.EnrollmentStore;
 import foundation.aep.service.GrantContext;
 import foundation.aep.service.GrantResult;
 import foundation.aep.service.GrantTypeDefinition;
@@ -65,17 +67,21 @@ final class ServiceConformance {
     private static final String RESOURCE = "resource";
     private static final String STATUS = "status";
     private static final String CODE = "code";
+    private static final String CONTENT_TYPE = "content_type";
+    private static final String BODY = "body";
+    private static final String SERVICE_DOCUMENTS = "service-documents";
 
     private ServiceConformance() {}
 
     static boolean evaluate(AdapterRequest request) {
+        if (SERVICE_DOCUMENTS.equals(request.vector().category())) return DocumentConformance.evaluate(request);
         if (GRANT_REVOKE.equals(request.vector().category())
                 && request.testCase().expected().has("authorization_scheme")) return commandWire(request);
         if (VALIDATION_REQUIREMENTS.equals(request.vector().id())) return assertionValidation(request);
         Boolean shared = SharedConformance.evaluate(request);
         if (shared != null) return shared;
         return switch (request.vector().id()) {
-            case "repeated-existing" -> repeatedEnrollment();
+            case "repeated-existing" -> repeatedEnrollment(request);
             case "grant-before-enroll-rejected" -> grantBeforeEnrollment(request);
             case "command-header" -> commandHeaders(request);
             case "command-replay-conflict" -> commandReplay(request);
@@ -129,7 +135,7 @@ final class ServiceConformance {
                 URI.create("https://service.example" + ConformanceSupport.text(expected, "path")),
                 Map.of(
                         "Content-Type",
-                        List.of(ConformanceSupport.text(expected, "content_type")),
+                        List.of(ConformanceSupport.text(expected, CONTENT_TYPE)),
                         AUTHORIZATION,
                         List.of(ConformanceSupport.text(expected, "authorization_scheme") + " wire"),
                         "Idempotency-Key",
@@ -234,24 +240,56 @@ final class ServiceConformance {
         return token.serialize();
     }
 
-    private static boolean repeatedEnrollment() {
+    private static boolean repeatedEnrollment(AdapterRequest vector) {
+        JsonNode input = vector.testCase().input();
+        JsonNode expected = vector.testCase().expected();
+        JsonNode existing = ConformanceSupport.required(input, "existing");
+        String agentDid = ConformanceSupport.text(existing, "agent_did");
+        Instant since = Instant.parse(ConformanceSupport.text(existing, "since"));
+        AgentStatus status =
+                AgentStatus.valueOf(ConformanceSupport.text(existing, "status").toUpperCase(java.util.Locale.ROOT));
+        EnrollmentStore store = EnrollmentStore.inMemory();
+        EnrollmentRecord original =
+                EnrollmentRecord.builder(agentDid, ENROLLMENT_ID, status, since).build();
+        store.save(original).toCompletableFuture().join();
         AtomicInteger decisions = new AtomicInteger();
-        AepService service = serviceBuilder(document(List.of(ENROLL, INSPECT), List.of(Aep.AUTHENTICATION_METHOD_JWT)))
+        AepService service = AepService.builder(
+                        document(List.of(ENROLL, INSPECT), List.of(Aep.AUTHENTICATION_METHOD_JWT)),
+                        (assertion, context) -> completed(new ClientAssertionClaims(
+                                agentDid,
+                                agentDid,
+                                context.serviceDid(),
+                                context.operation(),
+                                NOW.getEpochSecond(),
+                                NOW.plusSeconds(60).getEpochSecond(),
+                                assertion,
+                                null)))
+                .clock(Clock.fixed(NOW, ZoneOffset.UTC))
+                .enrollmentStore(store)
                 .enrollmentPolicy((request, now) -> {
                     decisions.incrementAndGet();
-                    return completed(EnrollmentDecision.active());
+                    return completed(new EnrollmentDecision(AgentStatus.ACTIVE, null, null, null, false));
                 })
                 .build();
-        EnrollRequest request = new EnrollRequest(AGENT_DID, null, null);
-        var first = service.enroll(request, options("first", "first"))
+        EnrollRequest request = AepJson.parseEnrollRequest(
+                ConformanceSupport.required(input, "request").toString());
+        var response = service.enroll(request, options("repeat", request.idempotencyKey()))
                 .toCompletableFuture()
                 .join();
-        var second = service.enroll(request, options("second", "second"))
-                .toCompletableFuture()
-                .join();
-        return first.body().status() == AgentStatus.ACTIVE
-                && second.body().status() == AgentStatus.ACTIVE
-                && decisions.get() == 1;
+        EnrollmentRecord saved =
+                store.find(agentDid).toCompletableFuture().join().orElseThrow();
+        JsonNode expectedResponse = ConformanceSupport.required(expected, "response");
+        return response.status()
+                        == ConformanceSupport.required(expectedResponse, "status")
+                                .asInt()
+                && response.contentType().equals(ConformanceSupport.text(expectedResponse, CONTENT_TYPE))
+                && ConformanceSupport.jsonEquals(response.body(), ConformanceSupport.required(expectedResponse, BODY))
+                && (decisions.get() == 1)
+                        == ConformanceSupport.required(expected, "policy_evaluated")
+                                .asBoolean()
+                && !saved.equals(original)
+                        == ConformanceSupport.required(expected, "record_replaced")
+                                .asBoolean();
     }
 
     private static boolean grantBeforeEnrollment(AdapterRequest request) {
@@ -419,23 +457,23 @@ final class ServiceConformance {
                 && conflict.status()
                         == vector.testCase().expected().path(STATUS).asInt()
                 && conflict.contentType()
-                        .equals(ConformanceSupport.text(vector.testCase().expected(), "content_type"))
-                && conflictMatches(conflict, vector.testCase().expected().path("body"))
+                        .equals(ConformanceSupport.text(vector.testCase().expected(), CONTENT_TYPE))
+                && conflictMatches(conflict, vector.testCase().expected().path(BODY))
                 && conflict.problem()
                         .type()
                         .equals(ConformanceSupport.text(
-                                vector.testCase().expected().path("body"), "type"))
+                                vector.testCase().expected().path(BODY), "type"))
                 && conflict.problem()
                         .title()
                         .equals(ConformanceSupport.text(
-                                vector.testCase().expected().path("body"), "title"));
+                                vector.testCase().expected().path(BODY), "title"));
     }
 
     // CORE-CACHE-008: the media-type essence is compared case-insensitively and valid parameters are
     // ignored. The HTTP binding is driven with input.content_type verbatim, and must accept that
     // field value while refusing application/json.
     private static boolean transport(AdapterRequest request) {
-        String contentType = ConformanceSupport.text(request.testCase().input(), "content_type");
+        String contentType = ConformanceSupport.text(request.testCase().input(), CONTENT_TYPE);
         String essence = ConformanceSupport.text(request.testCase().expected(), "media_type_essence");
         AepServiceHttpHandler handler = new AepServiceHttpHandler(
                 serviceBuilder(document(List.of(ENROLL, INSPECT), List.of(Aep.AUTHENTICATION_METHOD_JWT)))

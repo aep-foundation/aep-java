@@ -17,6 +17,8 @@ public final class EnrollmentRecord {
     private final boolean recordOwnerActionRequired;
     private final List<String> recordVerificationPending;
     private final List<String> recordRequirementsPending;
+    private final List<String> recordAcknowledgedDocumentIds;
+    private final List<String> recordRequiredDocumentIds;
 
     private EnrollmentRecord(Builder builder) {
         recordAgentDid = requireText(builder.configuredAgentDid, "agentDid");
@@ -29,6 +31,8 @@ public final class EnrollmentRecord {
         recordOwnerActionRequired = builder.configuredOwnerActionRequired;
         recordVerificationPending = List.copyOf(builder.configuredVerificationPending);
         recordRequirementsPending = List.copyOf(builder.configuredRequirementsPending);
+        recordAcknowledgedDocumentIds = List.copyOf(builder.configuredAcknowledgedDocumentIds);
+        recordRequiredDocumentIds = List.copyOf(builder.configuredRequiredDocumentIds);
     }
 
     public static Builder builder(String agentDid, String enrollmentId, AgentStatus status, Instant createdAt) {
@@ -75,6 +79,14 @@ public final class EnrollmentRecord {
         return recordRequirementsPending;
     }
 
+    public List<String> acknowledgedDocumentIds() {
+        return recordAcknowledgedDocumentIds;
+    }
+
+    public List<String> requiredDocumentIds() {
+        return recordRequiredDocumentIds;
+    }
+
     public static final class Builder {
         private final String configuredAgentDid;
         private final String configuredEnrollmentId;
@@ -86,6 +98,8 @@ public final class EnrollmentRecord {
         private boolean configuredOwnerActionRequired;
         private List<String> configuredVerificationPending = List.of();
         private List<String> configuredRequirementsPending = List.of();
+        private List<String> configuredAcknowledgedDocumentIds = List.of();
+        private List<String> configuredRequiredDocumentIds = List.of();
 
         private Builder(String agentDid, String enrollmentId, AgentStatus status, Instant createdAt) {
             configuredAgentDid = agentDid;
@@ -133,6 +147,16 @@ public final class EnrollmentRecord {
 
         public EnrollmentRecord build() {
             return new EnrollmentRecord(this);
+        }
+
+        public Builder acknowledgedDocumentIds(List<String> value) {
+            configuredAcknowledgedDocumentIds = List.copyOf(value);
+            return this;
+        }
+
+        public Builder requiredDocumentIds(List<String> value) {
+            configuredRequiredDocumentIds = List.copyOf(value);
+            return this;
         }
     }
 

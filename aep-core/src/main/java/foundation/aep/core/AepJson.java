@@ -1,5 +1,6 @@
 package foundation.aep.core;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.ServiceLoader;
@@ -22,6 +23,7 @@ public final class AepJson {
     private static final String OAUTH_RESPONSE = "OAuth Bearer Grant response";
     private static final String OPENAPI_SCHEME = "OpenAPI AEP security scheme";
     private static final String PROBLEM_DETAILS = "Problem Details";
+    private static final String PORTABLE_DOCUMENT = "Portable document";
     private static final String PROTECTED_AUTHORIZATION = "protected-resource authorization";
     private static final String RESOURCE = "resource";
     private static final String SERVICE_DID = "service_did";
@@ -67,7 +69,8 @@ public final class AepJson {
     public static EnrollRequest parseEnrollRequest(String json) {
         Map<String, Object> value = object(json, ENROLL_REQUEST);
         AepRawJson.requireMembers(value, ENROLL_REQUEST, AGENT_DID);
-        AepRawJson.rejectNullPaths(value, ENROLL_REQUEST, AGENT_DID, "claims", "idempotency_key");
+        AepRawJson.rejectNullPaths(
+                value, ENROLL_REQUEST, AGENT_DID, "claims", "idempotency_key", "acknowledged_document_ids");
         if (value.get("claims") instanceof Map<?, ?> claims) {
             AepRawJson.claimValues(claims);
         }
@@ -83,7 +86,8 @@ public final class AepJson {
                 STATUS,
                 "owner_action_required",
                 "verification_pending",
-                "requirements_pending");
+                "requirements_pending",
+                "acknowledged_document_ids");
         return parse(json, EnrollResponse.class, ENROLL_RESPONSE, AepValidation::enrollResponse);
     }
 
@@ -151,7 +155,8 @@ public final class AepJson {
                 "code",
                 "owner_action_required",
                 "requirements_pending",
-                "verification_pending");
+                "verification_pending",
+                "required_document_ids");
         return parse(json, ProblemDetails.class, PROBLEM_DETAILS, AepValidation::problemDetails);
     }
 
@@ -381,13 +386,31 @@ public final class AepJson {
         return Copies.jsonMap(object(json, documentType));
     }
 
+    public static ServiceDocument parseServiceDocument(String json) {
+        return parse(json, ServiceDocument.class, "Service document", ServiceDocuments::descriptor);
+    }
+
+    public static PortableServiceDocument parsePortableServiceDocument(String json, String expectedId) {
+        if (json == null || json.getBytes(StandardCharsets.UTF_8).length > ServiceDocuments.MAX_BYTES) {
+            throw new AepValidationException(
+                    PORTABLE_DOCUMENT, List.of(new ValidationIssue("$", "Document exceeds one MiB or is absent.")));
+        }
+        AepRawJson.rejectNullPaths(object(json, PORTABLE_DOCUMENT), PORTABLE_DOCUMENT, "summary");
+        return parse(
+                json,
+                PortableServiceDocument.class,
+                PORTABLE_DOCUMENT,
+                value -> ServiceDocuments.portable(value, expectedId));
+    }
+
     private static Object canonicalValue(Object value) {
         if (value instanceof EnrollResponse response) {
             return new EnrollResponse(
                     response.status(),
                     canonicalOwnerAction(response.ownerActionRequired()),
                     canonicalPending(response.verificationPending()),
-                    canonicalPending(response.requirementsPending()));
+                    canonicalPending(response.requirementsPending()),
+                    response.acknowledgedDocumentIds());
         }
         if (value instanceof StatusResponse response) {
             return new StatusResponse(
@@ -407,7 +430,8 @@ public final class AepJson {
                     problem.code(),
                     canonicalOwnerAction(problem.ownerActionRequired()),
                     canonicalPending(problem.requirementsPending()),
-                    canonicalPending(problem.verificationPending()));
+                    canonicalPending(problem.verificationPending()),
+                    problem.requiredDocumentIds());
         }
         return value;
     }

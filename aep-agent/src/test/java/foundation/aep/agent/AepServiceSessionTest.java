@@ -146,16 +146,59 @@ class AepServiceSessionTest {
     }
 
     @Test
-    void enrollRejectsMissingRequiredClaimsBeforeCommandRequest() {
+    void enrollLetsTheServiceResolveMissingRequiredClaimsFromStoredEnrollment() {
         QueueTransport inspect = new QueueTransport(
                 aepResponse(200, document(List.of("enroll", "inspect"), List.of(), List.of("contact.email"))));
-        QueueTransport command = new QueueTransport();
+        QueueTransport command = new QueueTransport(aepResponse(200, "{\"status\":\"active\"}"));
         AepServiceSession session = agent(inspect, command).build().service(ORIGIN);
 
-        AepAgentException error =
-                agentError(session.enroll(ClaimValues.builder().build()));
+        assertEquals(
+                AgentStatus.ACTIVE,
+                session.enroll(ClaimValues.builder().build()).join().status());
+        assertEquals(1, command.requests.size());
+    }
 
-        assertEquals("requirements_unmet", error.code());
+    @Test
+    void enrollmentDocumentDeclarationsRequireAdvertisementAndExactEchoes() {
+        String inspection = document(List.of("enroll", "inspect"), List.of(), List.of())
+                .replace(
+                        "\"extensions\":{\"supported\":[]}",
+                        "\"extensions\":{\"supported\":[\"" + foundation.aep.core.ServiceDocuments.EXTENSION + "\"]}");
+        for (List<String> ids : java.util.Arrays.asList(null, List.<String>of(), List.of("Terms", "privacy"))) {
+            String suffix = ids == null ? "" : ",\"acknowledged_document_ids\":" + array(ids);
+            QueueTransport command = new QueueTransport(aepResponse(200, "{\"status\":\"active\"" + suffix + "}"));
+            var session = agent(new QueueTransport(aepResponse(200, inspection)), command)
+                    .build()
+                    .service(ORIGIN);
+            assertEquals(ids, session.enroll(null, ids).join().acknowledgedDocumentIds());
+            var sent = foundation.aep.core.AepJson.parseEnrollRequest(
+                    new String(command.requests.get(0).body(), StandardCharsets.UTF_8));
+            assertEquals(ids, sent.acknowledgedDocumentIds());
+            assertEquals(1, command.requests.size());
+        }
+        for (String response : List.of(
+                "{\"status\":\"active\"}",
+                "{\"status\":\"active\",\"acknowledged_document_ids\":[\"terms\"]}",
+                "{\"status\":\"active\",\"acknowledged_document_ids\":[\"Terms\",\"extra\"]}")) {
+            QueueTransport command = new QueueTransport(aepResponse(200, response));
+            var session = agent(new QueueTransport(aepResponse(200, inspection)), command)
+                    .build()
+                    .service(ORIGIN);
+            assertEquals(
+                    "document_acknowledgement_mismatch",
+                    agentError(session.enroll(null, List.of("Terms"))).code());
+            assertEquals(1, command.requests.size());
+        }
+        QueueTransport command = new QueueTransport();
+        var session = agent(
+                        new QueueTransport(
+                                aepResponse(200, document(List.of("enroll", "inspect"), List.of(), List.of()))),
+                        command)
+                .build()
+                .service(ORIGIN);
+        assertEquals(
+                "service_documents_unavailable",
+                agentError(session.enroll(null, List.of())).code());
         assertTrue(command.requests.isEmpty());
     }
 
@@ -236,6 +279,39 @@ class AepServiceSessionTest {
         assertEquals(List.of("Secret value"), authentication.headers().get("X-Credential"));
         assertFalse(authentication.toString().contains("Secret value"));
         assertEquals("origin_mismatch", crossOrigin.code());
+    }
+
+    @Test
+    void grantPreservesDocumentAndClaimRequirementsWithoutStartingEnrollment() {
+        QueueTransport inspect = new QueueTransport(aepResponse(
+                200,
+                document(
+                        List.of("enroll", "grant", "inspect", "status"),
+                        List.of(Aep.AUTHENTICATION_METHOD_JWT),
+                        List.of())));
+        QueueTransport command = new QueueTransport(
+                aepResponse(200, "{\"status\":\"active\"}"),
+                response(422, Map.of("Content-Type", List.of(Aep.PROBLEM_MEDIA_TYPE)), """
+                        {"type":"urn:aep:error:requirements_unmet","title":"Enrollment update required",
+                         "status":422,"code":"requirements_unmet","owner_action_required":"true",
+                         "requirements_pending":["contact.email","service_documents"],
+                         "required_document_ids":["terms"]}
+                        """));
+        MemoryCredentialStore store = new MemoryCredentialStore();
+        AepServiceSession session =
+                agent(inspect, command).credentialStore(store).build().service(ORIGIN);
+
+        AepAgentException error = agentError(session.grant("custom-grant", List.of()));
+
+        assertEquals("requirements_unmet", error.code());
+        assertEquals(422, error.status());
+        assertEquals(List.of("terms"), error.problem().requiredDocumentIds());
+        assertEquals(
+                List.of("contact.email", "service_documents"), error.problem().requirementsPending());
+        assertEquals(2, command.requests.size());
+        assertTrue(command.requests.get(0).uri().getPath().endsWith("/status"));
+        assertTrue(command.requests.get(1).uri().getPath().endsWith("/grant"));
+        assertTrue(store.credential.isEmpty());
     }
 
     @Test
