@@ -116,7 +116,8 @@ if (enrolled.status() == AgentStatus.PENDING) {
 AgentGrantResult grant = service.grant("api-key", List.of("catalog:read")).join();
 ```
 
-`enroll` rejects locally when required advertised claims are missing. `waitForActive` is intended
+`enroll` validates supplied claims; the Service decides whether required claims are satisfied by
+the request and its stored enrollment. `waitForActive` is intended
 for a Service that returns a pending enrollment; an immediately active enrollment can proceed
 directly to Grant.
 
@@ -126,6 +127,39 @@ configure request timeouts on that transport as well.
 
 Built-in credential handlers parse and store OAuth Bearer, API-key, and Basic responses. A custom
 Grant Type remains available through `AgentCredentialHandler`.
+
+### Service documents
+
+`inspection.document().serviceDocuments()` exposes document IDs, titles, open types, enrollment
+requirements, and representation links. Present required documents to the Owner before supplying
+their explicit acknowledgement:
+
+```java
+ServiceDocument descriptor = inspection.document().serviceDocuments().get(0);
+AepDocumentReader.Result reading = AepDocumentReader.read(descriptor).join();
+// Present reading.document() when available; otherwise offer reading.webUrl().
+
+EnrollResponse enrolled = service.enroll(claims, List.of("general-terms", "privacy")).join();
+```
+
+`AepDocumentReader` uses a separate anonymous JDK HTTP client without authentication or cookies.
+It accepts HTTPS with normal certificate and hostname verification, or HTTP on literal
+`localhost`, `127.0.0.1`, and `[::1]` hosts for local development. The caller owns destination
+trust; the reader does not inspect DNS answers or connected addresses. It refuses redirects,
+limits responses to one mebibyte, and validates UTF-8, media type, portable structure, and document ID.
+The default ten-second timeout covers the complete download, including the body; use
+`read(descriptor, Duration)` to set a positive timeout representable in nanoseconds. Cancel the returned future
+to cancel the download. Missing or unusable portable content returns the HTML link with reason
+`not_advertised` or `unavailable_or_unsupported`; cancellation remains cancellation, and invalid
+descriptors or timeout arguments throw. A successful result has a document and no reason.
+
+Only send IDs the Owner accepted. A null list omits the declaration; an empty list declares no
+accepted documents. The Service must advertise the extension, and a successful response must echo
+the exact declaration. Inspecting or reading a document does not acknowledge it.
+
+Explicit repeated Enroll uses the same Agent identity and reaches the Service. Grant errors retain
+the Service's `requirementsPending` and `requiredDocumentIds` in `AepAgentException.problem()`. Present those
+requirements so the caller can choose to repeat Enroll and then Grant; the SDK does not chain them.
 
 ## Authenticate and revoke
 

@@ -52,6 +52,27 @@ Use `AepValidation` when the application already has a typed value:
 List<ValidationIssue> issues = AepValidation.enrollRequest(request);
 ```
 
+## Service documents
+
+`ServiceDocument` represents Inspect metadata and `PortableServiceDocument` represents full text
+with an optional Service-authored summary. Document types are open strings;
+`ServiceDocuments.preferredTypes()` supplies the alphabetized conventional names.
+
+```java
+ServiceDocument descriptor = AepJson.parseServiceDocument(descriptorJson);
+PortableServiceDocument content = AepJson.parsePortableServiceDocument(contentJson, descriptor.id());
+```
+
+Parsing validates the matching ID, supported format and blocks, Unicode text limits, nesting,
+total block count, and 1 MiB portable payload bound. It does not fetch URLs or acknowledge documents.
+Applications must preserve Service-authored wording and structure when rendering blocks, neutralize
+terminal controls, and keep source links and agent instructions outside fenced untrusted text.
+Unsupported or unavailable portable content uses the descriptor's HTML link instead of partial text.
+
+Acknowledgement lists preserve omission versus an explicit empty list during parsing and writing.
+`required_document_ids` is restricted to document-related HTTP 422 `requirements_unmet` errors;
+unrecognized Agents must not receive these requirements.
+
 ## Compose HTTP paths and authorization
 
 `AepHttp` composes command paths from `http.endpoint_base` and renders or parses the standard and

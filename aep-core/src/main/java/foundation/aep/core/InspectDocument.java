@@ -15,6 +15,7 @@ public final class InspectDocument {
     private final Http documentHttp;
     private final Identity documentIdentity;
     private final Service documentService;
+    private final List<ServiceDocument> documentServiceDocuments;
 
     private InspectDocument(Builder builder) {
         documentVersion = builder.configuredVersion;
@@ -27,6 +28,7 @@ public final class InspectDocument {
         documentHttp = builder.configuredHttp;
         documentIdentity = builder.configuredIdentity;
         documentService = builder.configuredService;
+        documentServiceDocuments = Copies.nullableList(builder.configuredServiceDocuments);
     }
 
     public static Builder builder() {
@@ -81,6 +83,11 @@ public final class InspectDocument {
     @JsonProperty("service")
     public Service service() {
         return documentService;
+    }
+
+    @JsonProperty("service_documents")
+    public List<ServiceDocument> serviceDocuments() {
+        return documentServiceDocuments == null ? null : List.copyOf(documentServiceDocuments);
     }
 
     public record Authentication(List<String> methods) {
@@ -173,6 +180,7 @@ public final class InspectDocument {
         private Http configuredHttp;
         private Identity configuredIdentity;
         private Service configuredService;
+        private List<ServiceDocument> configuredServiceDocuments;
 
         private Builder() {}
 
@@ -224,6 +232,12 @@ public final class InspectDocument {
 
         public Builder service(Service value) {
             configuredService = value;
+            return this;
+        }
+
+        @JsonProperty("service_documents")
+        public Builder serviceDocuments(List<ServiceDocument> value) {
+            configuredServiceDocuments = Copies.nullableList(value);
             return this;
         }
 

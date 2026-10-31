@@ -8,6 +8,7 @@ import foundation.aep.core.AgentStatus;
 import foundation.aep.core.AssertionOperation;
 import foundation.aep.core.AuthorizationCarrier;
 import foundation.aep.core.AuthorizationScheme;
+import foundation.aep.core.ClaimValues;
 import foundation.aep.core.ClientAssertionClaims;
 import foundation.aep.core.EnrollRequest;
 import foundation.aep.core.EnrollResponse;
@@ -17,6 +18,7 @@ import foundation.aep.core.ProblemDetails;
 import foundation.aep.core.ProtectedResourceAuthorization;
 import foundation.aep.core.RevokeRequest;
 import foundation.aep.core.RevokeResponse;
+import foundation.aep.core.ServiceDocuments;
 import foundation.aep.core.StatusResponse;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -106,7 +108,16 @@ public final class AepService {
             if (!claimValueLimits.accepts(request.claims())) {
                 return completed(problem("requirements_unmet", "Requirements unmet", 422));
             }
-            return idempotent(claims.subject(), "enroll", options.idempotencyKey(), request, () -> enrollNew(request));
+            return idempotent(
+                    claims.subject(),
+                    "enroll",
+                    options.idempotencyKey(),
+                    request,
+                    () -> enrollNew(
+                            supportsDocuments()
+                                    ? request
+                                    : new EnrollRequest(
+                                            request.agentDid(), request.claims(), request.idempotencyKey())));
         });
     }
 
@@ -203,15 +214,18 @@ public final class AepService {
     private CompletionStage<ServiceResponse<EnrollResponse>> enrollNew(EnrollRequest request) {
         return enrollmentStore.find(request.agentDid()).thenCompose(existing -> {
             if (existing.isPresent()) {
-                return completed(ServiceResponse.success(enrollResponse(existing.get())));
+                return updateEnrollment(request, existing.get());
             }
             List<String> missing = missingRequiredClaims(request);
-            if (!missing.isEmpty()) {
-                return completed(problem("requirements_unmet", "Requirements unmet", 422, missing));
+            List<String> missingDocuments =
+                    request.acknowledgedDocumentIds() == null ? missingDocumentIds(null) : List.of();
+            if (!missing.isEmpty() || !missingDocuments.isEmpty()) {
+                return completed(documentRequirements(missing, missingDocuments));
             }
             return enrollmentStore
                     .findOrCreate(request.agentDid(), () -> createEnrollment(request))
-                    .thenApply(selection -> ServiceResponse.success(enrollResponse(selection.record())));
+                    .thenApply(selection -> ServiceResponse.success(
+                            enrollResponse(selection.record(), request.acknowledgedDocumentIds())));
         });
     }
 
@@ -222,10 +236,67 @@ public final class AepService {
                 .thenApply(decision -> EnrollmentRecord.builder(
                                 request.agentDid(), requireIdentifier(), decision.status(), now)
                         .claims(request.claims())
-                        .ownerActionRequired(decision.ownerActionRequired())
-                        .verificationPending(decision.verificationPending())
-                        .requirementsPending(decision.requirementsPending())
+                        .acknowledgedDocumentIds(
+                                decision.status() == AgentStatus.REJECTED
+                                        ? List.of()
+                                        : acceptedDocumentIds(List.of(), request.acknowledgedDocumentIds()))
+                        .ownerActionRequired(Boolean.TRUE.equals(decision.ownerActionRequired()))
+                        .verificationPending(
+                                decision.verificationPending() == null ? List.of() : decision.verificationPending())
+                        .requirementsPending(
+                                decision.requirementsPending() == null ? List.of() : decision.requirementsPending())
                         .build());
+    }
+
+    private CompletionStage<ServiceResponse<EnrollResponse>> updateEnrollment(
+            EnrollRequest request, EnrollmentRecord existing) {
+        Instant now = clock.instant();
+        return enrollmentPolicy.decide(request, now).thenCompose(decision -> {
+            if (decision.status() == AgentStatus.REJECTED) {
+                return completed(problem("enrollment_failed", "Enrollment failed", 403));
+            }
+            if (!decision.updateExisting()) {
+                return completed(ServiceResponse.success(enrollResponse(existing, request.acknowledgedDocumentIds())));
+            }
+            Map<String, Object> merged = new LinkedHashMap<>();
+            if (existing.claims() != null) merged.putAll(canonicalClaims(existing.claims()));
+            if (request.claims() != null) merged.putAll(canonicalClaims(request.claims()));
+            ClaimValues claims = AepJson.parseClaimValues(AepJson.write(merged));
+            List<String> missing = missingRequiredClaims(new EnrollRequest(request.agentDid(), claims, null));
+            List<String> missingDocuments =
+                    request.acknowledgedDocumentIds() == null ? missingDocumentIds(existing) : List.of();
+            if (!missing.isEmpty() || !missingDocuments.isEmpty()) {
+                return completed(documentRequirements(missing, missingDocuments));
+            }
+            EnrollmentRecord updated = EnrollmentRecord.builder(
+                            existing.agentDid(), existing.enrollmentId(), existing.status(), existing.createdAt())
+                    .claims(claims)
+                    .acknowledgedDocumentIds(
+                            acceptedDocumentIds(existing.acknowledgedDocumentIds(), request.acknowledgedDocumentIds()))
+                    .requiredDocumentIds(existing.requiredDocumentIds().stream()
+                            .filter(id -> request.acknowledgedDocumentIds() == null
+                                    || !request.acknowledgedDocumentIds().contains(id))
+                            .toList())
+                    .since(existing.since())
+                    .updatedAt(now)
+                    .ownerActionRequired(
+                            decision.ownerActionRequired() == null
+                                    ? existing.ownerActionRequired()
+                                    : decision.ownerActionRequired())
+                    .requirementsPending(
+                            decision.requirementsPending() == null
+                                    ? existing.requirementsPending()
+                                    : decision.requirementsPending())
+                    .verificationPending(
+                            decision.verificationPending() == null
+                                    ? existing.verificationPending()
+                                    : decision.verificationPending())
+                    .build();
+            return enrollmentStore
+                    .save(updated)
+                    .thenApply(record ->
+                            ServiceResponse.success(enrollResponse(record, request.acknowledgedDocumentIds())));
+        });
     }
 
     private List<String> missingRequiredClaims(EnrollRequest request) {
@@ -239,6 +310,52 @@ public final class AepService {
         return missing;
     }
 
+    private boolean supportsDocuments() {
+        return document.extensions() != null
+                && document.extensions().supported().contains(ServiceDocuments.EXTENSION);
+    }
+
+    private List<String> missingDocumentIds(EnrollmentRecord record) {
+        if (document.serviceDocuments() == null) return List.of();
+        return document.serviceDocuments().stream()
+                .filter(item -> "required".equals(item.enrollment()))
+                .filter(item -> record == null
+                        || !record.acknowledgedDocumentIds().contains(item.id())
+                        || record.requiredDocumentIds().contains(item.id()))
+                .map(foundation.aep.core.ServiceDocument::id)
+                .toList();
+    }
+
+    private List<String> acceptedDocumentIds(List<String> existing, List<String> declared) {
+        List<String> accepted = new ArrayList<>(existing);
+        if (declared != null && document.serviceDocuments() != null) {
+            for (String id : declared) {
+                if (!accepted.contains(id)
+                        && document.serviceDocuments().stream()
+                                .anyMatch(item -> item.id().equals(id))) accepted.add(id);
+            }
+        }
+        return accepted;
+    }
+
+    private static <T> ServiceResponse<T> documentRequirements(List<String> claims, List<String> ids) {
+        if (ids.isEmpty()) return problem("requirements_unmet", "Requirements unmet", 422, claims);
+        List<String> pending = new ArrayList<>(claims);
+        pending.add("service_documents");
+        ProblemDetails failure = new ProblemDetails(
+                "urn:aep:error:requirements_unmet",
+                "Requirements unmet",
+                422,
+                null,
+                null,
+                "requirements_unmet",
+                STRING_TRUE,
+                pending,
+                null,
+                ids);
+        return new ServiceResponse<>(422, Aep.PROBLEM_MEDIA_TYPE, null, failure, Map.of());
+    }
+
     private CompletionStage<ServiceResponse<Map<String, Object>>> grantNew(String agentDid, GrantRequest request) {
         GrantTypeDefinition definition = grantTypes.get(request.grantType());
         if (definition == null) return completed(problem("unsupported_grant_type", "Unsupported Grant Type", 400));
@@ -246,6 +363,11 @@ public final class AepService {
             if (enrollment.isEmpty()) return completed(problem(ERROR_NOT_RECOGNIZED, TITLE_NOT_RECOGNIZED, 401));
             ServiceResponse<Map<String, Object>> lifecycle = blockedGrant(enrollment.get());
             if (lifecycle != null) return completed(lifecycle);
+            List<String> missing = missingRequiredClaims(
+                    new EnrollRequest(agentDid, enrollment.get().claims(), null));
+            List<String> missingDocuments = missingDocumentIds(enrollment.get());
+            if (!missing.isEmpty() || !missingDocuments.isEmpty())
+                return completed(documentRequirements(missing, missingDocuments));
             GrantContext context = new GrantContext(agentDid, enrollment.get(), request.grantType(), clock.instant());
             return definition
                     .handler()
@@ -496,6 +618,8 @@ public final class AepService {
             value.put("agent_did", enroll.agentDid());
             if (enroll.claims() != null) value.put("claims", canonicalClaims(enroll.claims()));
             if (enroll.idempotencyKey() != null) value.put("idempotency_key", enroll.idempotencyKey());
+            if (enroll.acknowledgedDocumentIds() != null)
+                value.put("acknowledged_document_ids", enroll.acknowledgedDocumentIds());
             return value;
         }
         if (request instanceof GrantRequest grant) {
@@ -541,12 +665,13 @@ public final class AepService {
         return value;
     }
 
-    private static EnrollResponse enrollResponse(EnrollmentRecord record) {
+    private static EnrollResponse enrollResponse(EnrollmentRecord record, List<String> declared) {
         return new EnrollResponse(
                 record.status(),
                 record.ownerActionRequired() ? STRING_TRUE : null,
                 emptyToNull(record.verificationPending()),
-                emptyToNull(record.requirementsPending()));
+                emptyToNull(record.requirementsPending()),
+                record.status() == AgentStatus.REJECTED ? null : declared);
     }
 
     private static StatusResponse statusResponse(EnrollmentRecord record) {

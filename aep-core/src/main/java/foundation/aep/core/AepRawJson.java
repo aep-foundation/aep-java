@@ -71,7 +71,8 @@ final class AepRawJson {
                 "extensions",
                 "http",
                 "identity",
-                "service");
+                "service",
+                "service_documents");
         closedObject(value.get("authentication"), "$.authentication", Set.of("methods"));
         rejectKnownNulls(value.get("bindings"), "$.bindings", "supported");
         rejectKnownNulls(value.get("claims"), "$.claims", "required", "preferred", "optional");

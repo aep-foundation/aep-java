@@ -10,6 +10,7 @@ import com.nimbusds.jose.jwk.Curve;
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.gen.ECKeyGenerator;
 import foundation.aep.core.Aep;
+import foundation.aep.core.AepJson;
 import foundation.aep.core.AgentStatus;
 import foundation.aep.core.ClaimValues;
 import foundation.aep.core.ClientAssertionClaims;
@@ -18,6 +19,8 @@ import foundation.aep.core.EnrollRequest;
 import foundation.aep.core.GrantRequest;
 import foundation.aep.core.InspectDocument;
 import foundation.aep.core.RevokeRequest;
+import foundation.aep.core.ServiceDocument;
+import foundation.aep.core.ServiceDocuments;
 import java.net.URI;
 import java.time.Clock;
 import java.time.Instant;
@@ -36,7 +39,181 @@ final class AepServiceTest {
     private static final String AGENT_DID = "did:web:agent.example";
 
     @Test
-    void enrollsOnceAndReturnsExistingLifecycleForANewKey() {
+    void appliesOnlyDeclaredDocumentsAndBlocksGrantUntilRequirementsAreMet() {
+        EnrollmentStore store = EnrollmentStore.inMemory();
+        AtomicInteger decisions = new AtomicInteger();
+        RecordingGrantHandler handler = new RecordingGrantHandler();
+        AepService service = documentService(
+                store,
+                (request, now) -> {
+                    decisions.incrementAndGet();
+                    return completed(EnrollmentDecision.active());
+                },
+                handler);
+        var absent = service.enroll(requestWithRequiredClaims(), idempotent("absent", "absent"))
+                .toCompletableFuture()
+                .join();
+        assertEquals(422, absent.status());
+        assertEquals(List.of("terms", "privacy"), absent.problem().requiredDocumentIds());
+        assertEquals(0, decisions.get());
+        EnrollRequest partial =
+                new EnrollRequest(AGENT_DID, requestWithRequiredClaims().claims(), null, List.of("terms"));
+        var first = service.enroll(partial, idempotent("first", "same-key"))
+                .toCompletableFuture()
+                .join();
+        assertEquals(200, first.status());
+        assertEquals(List.of("terms"), first.body().acknowledgedDocumentIds());
+        assertEquals(
+                first,
+                service.enroll(partial, idempotent("replay", "same-key"))
+                        .toCompletableFuture()
+                        .join());
+        assertEquals(1, decisions.get());
+        EnrollRequest changed = new EnrollRequest(AGENT_DID, null, null, List.of("privacy"));
+        assertEquals(
+                409,
+                service.enroll(changed, idempotent("conflict", "same-key"))
+                        .toCompletableFuture()
+                        .join()
+                        .status());
+        var failedGrant = service.grant(new GrantRequest("api-key", List.of()), idempotent("grant", "grant"))
+                .toCompletableFuture()
+                .join();
+        assertEquals(422, failedGrant.status());
+        assertEquals(List.of("privacy"), failedGrant.problem().requiredDocumentIds());
+        assertEquals(0, handler.issues.get());
+        EnrollmentRecord original =
+                store.find(AGENT_DID).toCompletableFuture().join().orElseThrow();
+        var empty = service.enroll(new EnrollRequest(AGENT_DID, null, null, List.of()), idempotent("empty", "empty"))
+                .toCompletableFuture()
+                .join();
+        assertEquals(List.of(), empty.body().acknowledgedDocumentIds());
+        assertEquals(
+                List.of("terms"),
+                store.find(AGENT_DID).toCompletableFuture().join().orElseThrow().acknowledgedDocumentIds());
+        var update = service.enroll(changed, idempotent("update", "update"))
+                .toCompletableFuture()
+                .join();
+        assertEquals(List.of("privacy"), update.body().acknowledgedDocumentIds());
+        EnrollmentRecord saved =
+                store.find(AGENT_DID).toCompletableFuture().join().orElseThrow();
+        assertEquals(List.of("terms", "privacy"), saved.acknowledgedDocumentIds());
+        assertEquals(original.enrollmentId(), saved.enrollmentId());
+        assertEquals(original.createdAt(), saved.createdAt());
+        assertEquals(original.since(), saved.since());
+        assertEquals(original.claims().contactEmail(), saved.claims().contactEmail());
+        assertEquals(
+                200,
+                service.grant(new GrantRequest("api-key", List.of()), idempotent("ready", "ready"))
+                        .toCompletableFuture()
+                        .join()
+                        .status());
+        assertEquals(1, handler.issues.get());
+        assertEquals(
+                failedGrant,
+                service.grant(new GrantRequest("api-key", List.of()), idempotent("retry-grant", "grant"))
+                        .toCompletableFuture()
+                        .join());
+        assertEquals(1, handler.issues.get());
+    }
+
+    @Test
+    void repeatedDocumentAcknowledgementsPreserveLifecycleAndHonorPolicy() {
+        for (AgentStatus status :
+                List.of(AgentStatus.ACTIVE, AgentStatus.SUSPENDED, AgentStatus.TERMINATED, AgentStatus.UNAVAILABLE)) {
+            EnrollmentStore store = EnrollmentStore.inMemory();
+            EnrollmentRecord original = EnrollmentRecord.builder(AGENT_DID, "original", status, NOW.minusSeconds(3600))
+                    .claims(requestWithRequiredClaims().claims())
+                    .acknowledgedDocumentIds(List.of("terms", "privacy"))
+                    .requiredDocumentIds(List.of("terms"))
+                    .build();
+            store.save(original).toCompletableFuture().join();
+            var policy = new java.util.concurrent.atomic.AtomicReference<>(EnrollmentDecision.active());
+            AepService service =
+                    documentService(store, (request, now) -> completed(policy.get()), new RecordingGrantHandler());
+            EnrollRequest request = new EnrollRequest(AGENT_DID, null, null, List.of("terms", "retired"));
+            policy.set(new EnrollmentDecision(AgentStatus.ACTIVE, null, null, null, false));
+            assertEquals(
+                    200,
+                    service.enroll(request, idempotent("unchanged", "unchanged"))
+                            .toCompletableFuture()
+                            .join()
+                            .status());
+            assertEquals(
+                    original, store.find(AGENT_DID).toCompletableFuture().join().orElseThrow());
+            policy.set(new EnrollmentDecision(AgentStatus.REJECTED, null, null, null));
+            assertEquals(
+                    403,
+                    service.enroll(request, idempotent("reject", "reject"))
+                            .toCompletableFuture()
+                            .join()
+                            .status());
+            assertEquals(
+                    original, store.find(AGENT_DID).toCompletableFuture().join().orElseThrow());
+            policy.set(EnrollmentDecision.active());
+            var result = service.enroll(request, idempotent("accept", "accept"))
+                    .toCompletableFuture()
+                    .join();
+            assertEquals(List.of("terms", "retired"), result.body().acknowledgedDocumentIds());
+            EnrollmentRecord saved =
+                    store.find(AGENT_DID).toCompletableFuture().join().orElseThrow();
+            assertEquals(status, saved.status());
+            assertEquals(original.since(), saved.since());
+            assertEquals(original.createdAt(), saved.createdAt());
+            assertEquals(original.enrollmentId(), saved.enrollmentId());
+            assertEquals(List.of(), saved.requiredDocumentIds());
+            assertEquals(List.of("terms", "privacy"), saved.acknowledgedDocumentIds());
+        }
+    }
+
+    @Test
+    void documentGrantReportsClaimsWithoutDisclosingUnrecognizedEnrollment() {
+        EnrollmentStore store = EnrollmentStore.inMemory();
+        RecordingGrantHandler handler = new RecordingGrantHandler();
+        AepService service = documentService(store, EnrollmentPolicy.active(), handler);
+        var unknown = service.grant(new GrantRequest("api-key", List.of()), idempotent("unknown", "unknown"))
+                .toCompletableFuture()
+                .join();
+        assertEquals(401, unknown.status());
+        org.junit.jupiter.api.Assertions.assertNull(unknown.problem().requiredDocumentIds());
+        store.save(EnrollmentRecord.builder(AGENT_DID, "existing", AgentStatus.ACTIVE, NOW)
+                        .build())
+                .toCompletableFuture()
+                .join();
+        var failure = service.grant(new GrantRequest("api-key", List.of()), idempotent("missing", "missing"))
+                .toCompletableFuture()
+                .join();
+        assertEquals(422, failure.status());
+        assertEquals(
+                List.of("contact.email", "service_documents"), failure.problem().requirementsPending());
+        assertEquals(List.of("terms", "privacy"), failure.problem().requiredDocumentIds());
+        assertEquals(0, handler.issues.get());
+    }
+
+    private static AepService documentService(
+            EnrollmentStore store, EnrollmentPolicy policy, RecordingGrantHandler handler) {
+        Map<String, Object> wire = new LinkedHashMap<>(AepJson.parseObject(AepJson.write(document(true)), "Inspect"));
+        wire.put("extensions", Map.of("supported", List.of(ServiceDocuments.EXTENSION)));
+        wire.put(
+                "service_documents",
+                List.of("terms", "privacy").stream()
+                        .map(id -> new ServiceDocument(
+                                id,
+                                "terms_of_service",
+                                id,
+                                "required",
+                                List.of(new ServiceDocument.Representation(
+                                        "text/html", "https://service.example/" + id))))
+                        .toList());
+        return serviceBuilder(AepJson.parseInspectDocument(AepJson.write(wire)), policy)
+                .enrollmentStore(store)
+                .grantType(new GrantTypeDefinition("api-key", handler))
+                .credentialAuthenticator("api-key", new EmptyAuthenticator())
+                .build();
+    }
+
+    @Test
+    void reevaluatesPolicyAndPreservesExistingLifecycleForANewKey() {
         AtomicInteger decisions = new AtomicInteger();
         EnrollmentPolicy policy = (request, now) -> {
             decisions.incrementAndGet();
@@ -56,7 +233,7 @@ final class AepServiceTest {
         assertEquals(200, first.status());
         assertEquals(AgentStatus.PENDING, ((foundation.aep.core.EnrollResponse) first.body()).status());
         assertEquals("true", ((foundation.aep.core.EnrollResponse) second.body()).ownerActionRequired());
-        assertEquals(1, decisions.get());
+        assertEquals(2, decisions.get());
     }
 
     @Test
@@ -80,6 +257,83 @@ final class AepServiceTest {
         assertEquals(first, replay);
         assertEquals(409, conflict.status());
         assertEquals("idempotency_conflict", conflict.problem().code());
+    }
+
+    @Test
+    void distinguishesOmittedAndExplicitPolicyMetadata() {
+        for (boolean initial : new boolean[] {true, false}) {
+            for (Boolean value : new Boolean[] {null, false, true}) {
+                EnrollmentStore store = EnrollmentStore.inMemory();
+                EnrollmentRecord original = EnrollmentRecord.builder(
+                                AGENT_DID, "existing", AgentStatus.SUSPENDED, NOW.minusSeconds(3600))
+                        .claims(requestWithRequiredClaims().claims())
+                        .ownerActionRequired(true)
+                        .requirementsPending(List.of("review"))
+                        .verificationPending(List.of("contact.email"))
+                        .build();
+                if (!initial) store.save(original).toCompletableFuture().join();
+                EnrollmentDecision decision = new EnrollmentDecision(
+                        AgentStatus.ACTIVE, value, value == null ? null : List.of(), value == null ? null : List.of());
+                AepService service = serviceBuilder(document(false), (request, now) -> completed(decision))
+                        .enrollmentStore(store)
+                        .build();
+                ServiceResponse<?> result = service.enroll(
+                                requestWithRequiredClaims(), idempotent("metadata", "metadata"))
+                        .toCompletableFuture()
+                        .join();
+                assertEquals(200, result.status());
+                EnrollmentRecord saved =
+                        store.find(AGENT_DID).toCompletableFuture().join().orElseThrow();
+                assertEquals(value == null ? !initial : value, saved.ownerActionRequired());
+                assertEquals(!initial && value == null ? List.of("review") : List.of(), saved.requirementsPending());
+                assertEquals(
+                        !initial && value == null ? List.of("contact.email") : List.of(), saved.verificationPending());
+                if (!initial) {
+                    assertEquals(original.enrollmentId(), saved.enrollmentId());
+                    assertEquals(original.createdAt(), saved.createdAt());
+                    assertEquals(original.since(), saved.since());
+                    assertEquals(AgentStatus.SUSPENDED, saved.status());
+                }
+            }
+        }
+    }
+
+    @Test
+    void repeatedEnrollmentMergesClaimsAndAllowsPolicyToLeaveRecordUntouched() {
+        for (EnrollmentDecision decision : List.of(
+                new EnrollmentDecision(AgentStatus.ACTIVE, true, List.of("verification"), List.of("review")),
+                new EnrollmentDecision(AgentStatus.REJECTED, null, null, null),
+                new EnrollmentDecision(AgentStatus.ACTIVE, null, null, null, false))) {
+            EnrollmentStore store = EnrollmentStore.inMemory();
+            EnrollmentRecord original = EnrollmentRecord.builder(
+                            AGENT_DID, "existing", AgentStatus.PENDING, NOW.minusSeconds(3600))
+                    .claims(requestWithRequiredClaims().claims())
+                    .build();
+            store.save(original).toCompletableFuture().join();
+            AepService service = serviceBuilder(document(false), (request, now) -> completed(decision))
+                    .enrollmentStore(store)
+                    .build();
+            EnrollRequest request = new EnrollRequest(
+                    AGENT_DID, ClaimValues.builder().personFirstName("Owner").build(), null);
+            ServiceResponse<?> result = service.enroll(request, idempotent("repeat", "repeat"))
+                    .toCompletableFuture()
+                    .join();
+            EnrollmentRecord saved =
+                    store.find(AGENT_DID).toCompletableFuture().join().orElseThrow();
+            if (decision.status() == AgentStatus.REJECTED || !decision.updateExisting()) {
+                assertEquals(decision.status() == AgentStatus.REJECTED ? 403 : 200, result.status());
+                assertEquals(original.updatedAt(), saved.updatedAt());
+                assertEquals(null, saved.claims().personFirstName());
+            } else {
+                assertEquals(200, result.status());
+                assertEquals("agent@example.com", saved.claims().contactEmail());
+                assertEquals("Owner", saved.claims().personFirstName());
+                assertTrue(saved.ownerActionRequired());
+                assertEquals(List.of("verification"), saved.verificationPending());
+                assertEquals(List.of("review"), saved.requirementsPending());
+                assertEquals(AgentStatus.PENDING, saved.status());
+            }
+        }
     }
 
     @Test
@@ -483,9 +737,11 @@ final class AepServiceTest {
 
     private static final class RecordingGrantHandler implements GrantTypeHandler {
         private final AtomicInteger revocations = new AtomicInteger();
+        private final AtomicInteger issues = new AtomicInteger();
 
         @Override
         public CompletionStage<GrantResult> grant(GrantRequest request, GrantContext context) {
+            issues.incrementAndGet();
             return completed(
                     new GrantResult("credential-1", Map.of("credential_id", "credential-1", "api_key", "secret")));
         }

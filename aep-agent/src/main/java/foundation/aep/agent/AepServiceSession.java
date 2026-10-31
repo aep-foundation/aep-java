@@ -18,6 +18,7 @@ import foundation.aep.core.GrantRequest;
 import foundation.aep.core.InspectDocument;
 import foundation.aep.core.RevokeRequest;
 import foundation.aep.core.RevokeResponse;
+import foundation.aep.core.ServiceDocuments;
 import foundation.aep.core.StatusResponse;
 import foundation.aep.core.ValidationIssue;
 import java.net.URI;
@@ -62,13 +63,29 @@ public final class AepServiceSession {
     }
 
     public CompletableFuture<EnrollResponse> enroll(ClaimValues claims) {
+        return enroll(claims, null);
+    }
+
+    public CompletableFuture<EnrollResponse> enroll(ClaimValues claims, List<String> acknowledgedDocumentIds) {
+        List<String> declared = acknowledgedDocumentIds == null ? null : List.copyOf(acknowledgedDocumentIds);
         return commandContext(AepCommand.ENROLL).thenCompose(context -> {
-            requireClaims(context.inspection.document(), claims);
+            InspectDocument document = context.inspection.document();
+            if (declared != null
+                    && (document.extensions() == null
+                            || !document.extensions().supported().contains(ServiceDocuments.EXTENSION))) {
+                return failed("service_documents_unavailable", "AEP Service does not advertise Service Documents");
+            }
             String key = idempotencyKey(context, AepCommand.ENROLL, "");
-            EnrollRequest request = new EnrollRequest(context.identity.did(), claims, key);
+            EnrollRequest request = new EnrollRequest(context.identity.did(), claims, key, declared);
             requireValid("Enroll request", AepValidation.enrollRequest(request));
             return execute(context, AepCommand.ENROLL, "POST", request, key, AepJson::parseEnrollResponse)
                     .thenApply(response -> {
+                        if (response.status() != AgentStatus.REJECTED
+                                && !Objects.equals(declared, response.acknowledgedDocumentIds())) {
+                            throw new AepAgentException(
+                                    "document_acknowledgement_mismatch",
+                                    "AEP enrollment document acknowledgement does not match the request");
+                        }
                         recordEnrollment(context, response.status());
                         return response;
                     });
@@ -473,18 +490,6 @@ public final class AepServiceSession {
                             Math.min(remainingNanos(startedNanos, timeoutNanos), timeoutNanos(interval)),
                             TimeUnit.NANOSECONDS));
         });
-    }
-
-    private static void requireClaims(InspectDocument document, ClaimValues claims) {
-        List<String> required =
-                document.claims() == null ? List.of() : document.claims().required();
-        List<String> missing = required.stream()
-                .filter(name -> claims == null || !claims.contains(name))
-                .toList();
-        if (!missing.isEmpty()) {
-            throw new AepAgentException(
-                    "requirements_unmet", "Required Service claims are unavailable: " + String.join(", ", missing));
-        }
     }
 
     private static void requirePerCredentialRevoke(InspectDocument document, RevokeRequest request) {

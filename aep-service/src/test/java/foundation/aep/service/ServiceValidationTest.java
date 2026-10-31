@@ -317,9 +317,20 @@ final class ServiceValidationTest {
         EnrollmentDecision decision = new EnrollmentDecision(null, false, null, null);
 
         assertEquals(AgentStatus.ACTIVE, decision.status());
-        assertEquals(List.of(), decision.verificationPending());
-        assertEquals(List.of(), decision.requirementsPending());
+        assertEquals(null, decision.verificationPending());
+        assertEquals(null, decision.requirementsPending());
         assertEquals(AgentStatus.ACTIVE, EnrollmentDecision.active().status());
+        List<String> pending = new java.util.ArrayList<>(List.of("review"));
+        EnrollmentDecision populated = new EnrollmentDecision(AgentStatus.ACTIVE, true, pending, pending);
+        pending.clear();
+        assertEquals(List.of("review"), populated.verificationPending());
+        assertEquals(List.of("review"), populated.requirementsPending());
+        assertThrows(
+                UnsupportedOperationException.class,
+                () -> populated.verificationPending().clear());
+        assertThrows(
+                UnsupportedOperationException.class,
+                () -> populated.requirementsPending().clear());
         assertThrows(
                 IllegalArgumentException.class,
                 () -> new EnrollmentDecision(AgentStatus.SUSPENDED, false, List.of(), List.of()));

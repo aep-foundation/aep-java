@@ -58,6 +58,12 @@ public final class AepValidation {
         validateCommands(value.commands(), issues);
         validateCore(value.core(), issues);
         validateExtensions(value.extensions(), issues);
+        issues.prefix("$.service_documents", ServiceDocuments.catalog(value.serviceDocuments()));
+        if (value.serviceDocuments() != null
+                && (value.extensions() == null
+                        || !value.extensions().supported().contains(ServiceDocuments.EXTENSION))) {
+            issues.add("$.service_documents", "Service Documents extension must be advertised.");
+        }
         validateHttp(value.http(), issues);
         validateIdentity(value.identity(), value.commands(), issues);
         if (value.service() == null
@@ -131,6 +137,7 @@ public final class AepValidation {
             issues.prefix("$.claims", claimValues(value.claims()));
         }
         optionalNonEmpty(value.idempotencyKey(), "$.idempotency_key", issues);
+        issues.prefix("$.acknowledged_document_ids", ServiceDocuments.identifiers(value.acknowledgedDocumentIds()));
         return issues.values();
     }
 
@@ -142,6 +149,7 @@ public final class AepValidation {
         if (value.status() == null) {
             issues.add(STATUS_PATH, "Expected a registered Agent status.");
         }
+        issues.prefix("$.acknowledged_document_ids", ServiceDocuments.identifiers(value.acknowledgedDocumentIds()));
         lifecycleMetadata(
                 value.ownerActionRequired(), value.verificationPending(), value.requirementsPending(), issues);
         return issues.values();
@@ -258,6 +266,20 @@ public final class AepValidation {
         Issues issues = new Issues();
         if (value == null) {
             return issues.required("$", JSON_OBJECT).values();
+        }
+        boolean documentsPending = value.requirementsPending() != null
+                && value.requirementsPending().contains("service_documents");
+        if (value.requiredDocumentIds() != null || documentsPending) {
+            issues.prefix("$.required_document_ids", ServiceDocuments.identifiers(value.requiredDocumentIds()));
+            if (value.requiredDocumentIds() == null
+                    || value.requiredDocumentIds().isEmpty()
+                    || !documentsPending
+                    || !"requirements_unmet".equals(value.code())
+                    || value.status() != 422) {
+                issues.add(
+                        "$.required_document_ids",
+                        "Document requirements require identifiers, service_documents, requirements_unmet, and status 422.");
+            }
         }
         requiredNonEmpty(value.code(), "$.code", issues);
         requiredNonEmpty(value.title(), "$.title", issues);
@@ -956,7 +978,7 @@ public final class AepValidation {
      * {@link URI#getHost()} keeps the brackets around an IPv6 literal, so the bracketed spelling is
      * the one a parsed URI actually presents.
      */
-    private static boolean isLoopbackHost(String host) {
+    static boolean isLoopbackHost(String host) {
         String normalized = host.toLowerCase(java.util.Locale.ROOT);
         return "localhost".equals(normalized)
                 || "127.0.0.1".equals(normalized) // NOPMD - Explicit development opt-in permits loopback HTTP.

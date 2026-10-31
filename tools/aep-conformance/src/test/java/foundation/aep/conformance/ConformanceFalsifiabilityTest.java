@@ -25,6 +25,40 @@ final class ConformanceFalsifiabilityTest {
     private static final String PLATFORM = "platform";
 
     @Test
+    void documentLifecycleAndGrantGuidanceExerciseServiceState() {
+        publishedFalsifiable(
+                SERVICE,
+                "service-documents",
+                "enrollment-lifecycle",
+                expected -> expected.put("identity_preserved", false));
+        publishedFalsifiable(SERVICE, "service-documents", "enrollment-lifecycle", expected -> {
+            expected.putArray("credential_ids");
+            return expected;
+        });
+        publishedFalsifiable(SERVICE, "service-documents", "enrollment-lifecycle", expected -> {
+            ((ObjectNode) expected.get("operations").get(1)).put("policy_effects_repeated", true);
+            return expected;
+        });
+        publishedFalsifiable(
+                SERVICE, "service-documents", "grant-guidance", expected -> expected.put("credential_issued", true));
+        publishedFalsifiable(SERVICE, "service-documents", "grant-guidance", expected -> {
+            ((ObjectNode) expected.get("unrecognized")).put("requirements_disclosed", true);
+            return expected;
+        });
+    }
+
+    @Test
+    void documentParsersExercisePublishedWireAndStructuralBoundaries() {
+        for (String id : List.of("wire-shapes", "structural-limits")) {
+            publishedFalsifiable(SERVICE, "service-documents", id, expected -> {
+                ObjectNode first = (ObjectNode) expected.get("cases").get(0);
+                first.put("valid", !first.get("valid").asBoolean());
+                return expected;
+            });
+        }
+    }
+
+    @Test
     void agentExecutesEveryHostedIdentityVector() {
         Path vectors = specVectors();
         Assumptions.assumeTrue(vectors != null, "Set AEP_SPECS_DIR to run published-vector regression tests");

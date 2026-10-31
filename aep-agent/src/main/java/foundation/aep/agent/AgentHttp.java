@@ -111,8 +111,7 @@ final class AgentHttp {
         try {
             requireMediaType(response, Aep.PROBLEM_MEDIA_TYPE);
             ProblemDetails problem = AepJson.parseProblemDetails(body(response));
-            return new AepAgentException(
-                    problem.code(), problem.detail() == null ? problem.title() : problem.detail(), response.status());
+            return new AepAgentException(problem, response.status());
         } catch (RuntimeException ignored) {
             return new AepAgentException("command_failed", "AEP command failed", response.status());
         }
