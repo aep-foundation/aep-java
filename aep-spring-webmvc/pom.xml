@@ -80,7 +80,7 @@
       <id>spring7</id>
       <properties>
         <jakarta-servlet.version>${jakarta-servlet7.version}</jakarta-servlet.version>
-        <spring.version>${spring7.version}</spring.version>
+        <spring.version>7.0.10</spring.version>
       </properties>
       <dependencies>
         <dependency>
