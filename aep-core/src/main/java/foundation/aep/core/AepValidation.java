@@ -501,7 +501,7 @@ public final class AepValidation {
                     && !"jwt".equals(bearer.tokenFormat())) {
                 issues.add("$.token_format", "Expected opaque or jwt.");
             }
-            if (!"Bearer".equals(bearer.tokenType())) {
+            if (!"Bearer".equalsIgnoreCase(bearer.tokenType())) {
                 issues.add("$.token_type", "Expected Bearer.");
             }
         } else if (value instanceof GrantResponses.ApiKey apiKey) {
@@ -515,9 +515,8 @@ public final class AepValidation {
                 issues.add("$.header", "Expected an HTTP field name.");
             }
         } else if (value instanceof GrantResponses.Basic basic) {
-            requiredNonEmpty(basic.password(), "$.password", issues);
-            requiredNonEmpty(basic.username(), "$.username", issues);
-            optionalNonEmpty(basic.realm(), "$.realm", issues);
+            if (basic.password() == null) issues.required("$.password", "string");
+            if (basic.username() == null) issues.required("$.username", "string");
             if (nonEmpty(basic.username())
                     && (basic.username().indexOf(':') >= 0 || containsControlCharacter(basic.username()))) {
                 issues.add("$.username", "Expected an RFC 7617 username without a colon or control character.");
@@ -986,14 +985,12 @@ public final class AepValidation {
     }
 
     private static boolean isApiKeyValue(String value) {
+        if (value.startsWith(" ") || value.endsWith(" ")) {
+            return false;
+        }
         for (int index = 0; index < value.length(); index++) {
             char character = value.charAt(index);
-            if (character < 0x21
-                    || character > 0x7e
-                    || character == 0x22
-                    || character == 0x2c
-                    || character == 0x3b
-                    || character == BACKSLASH) {
+            if (character < 0x20 || character > 0x7e) {
                 return false;
             }
         }

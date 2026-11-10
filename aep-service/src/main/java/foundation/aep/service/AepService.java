@@ -191,23 +191,26 @@ public final class AepService {
                     });
         }
         String presentedMethod = authenticationMethod(presentation.authorization());
-        if (presentedMethod != null && !authenticationMethods().contains(presentedMethod)) {
-            return completed(
-                    ProtectedResourceResult.rejected(resourceProblem("unsupported_authentication_method", resource)));
-        }
         return presentedCredentialMethods(authenticationMethods(), input, 0, List.of())
                 .thenCompose(methods -> {
                     if (methods.size() > 1
-                            || presentedMethod != null
-                                    && (methods.size() != 1 || !presentedMethod.equals(methods.get(0)))) {
+                            && !headerValues(request.headers(), Aep.AUTHORIZATION_HEADER)
+                                    .isEmpty()) {
                         return completed(
                                 ProtectedResourceResult.rejected(resourceProblem(ERROR_NOT_RECOGNIZED, resource)));
                     }
                     if (methods.isEmpty()) {
-                        return completed(
-                                ProtectedResourceResult.rejected(resourceProblem("authentication_required", resource)));
+                        if (presentedMethod != null && !authenticationMethods().contains(presentedMethod)) {
+                            return completed(ProtectedResourceResult.rejected(
+                                    resourceProblem("unsupported_authentication_method", resource)));
+                        }
+                        boolean presented = presentedMethod != null
+                                || headerValues(request.headers(), "Authorization").stream()
+                                        .anyMatch(AepService::namesAepScheme);
+                        return completed(ProtectedResourceResult.rejected(resourceProblem(
+                                presented ? ERROR_NOT_RECOGNIZED : "authentication_required", resource)));
                     }
-                    return authenticateCredential(methods, 0, input, true, resource);
+                    return authenticateCredential(methods, 0, input, true, resource, null);
                 });
     }
 
@@ -486,23 +489,29 @@ public final class AepService {
     }
 
     private CompletionStage<ProtectedResourceResult> authenticateCredential(
-            List<String> methods, int index, CredentialAuthenticationInput input, boolean presented, URI resource) {
+            List<String> methods,
+            int index,
+            CredentialAuthenticationInput input,
+            boolean presented,
+            URI resource,
+            AuthenticatedPrincipal matched) {
         if (index == methods.size()) {
+            if (matched != null) return completed(ProtectedResourceResult.authenticated(matched));
             String code = presented ? ERROR_NOT_RECOGNIZED : "authentication_required";
             return completed(ProtectedResourceResult.rejected(resourceProblem(code, resource)));
         }
         String method = methods.get(index);
         if (Aep.AUTHENTICATION_METHOD_JWT.equals(method)) {
-            return authenticateCredential(methods, index + 1, input, presented, resource);
+            return authenticateCredential(methods, index + 1, input, presented, resource, matched);
         }
         CredentialAuthenticator authenticator = authenticators.get(method);
         return authenticator.hasPresentation(input).thenCompose(hasPresentation -> {
             if (!hasPresentation) {
-                return authenticateCredential(methods, index + 1, input, presented, resource);
+                return authenticateCredential(methods, index + 1, input, presented, resource, matched);
             }
             return authenticator.authenticate(input).thenCompose(principal -> {
                 if (principal.isEmpty()) {
-                    return authenticateCredential(methods, index + 1, input, true, resource);
+                    return authenticateCredential(methods, index + 1, input, true, resource, matched);
                 }
                 AuthenticatedPrincipal value = principal.get();
                 if (value.kind() != AuthenticatedPrincipal.Kind.SESSION_CREDENTIAL
@@ -513,12 +522,16 @@ public final class AepService {
                     return CompletableFuture.failedFuture(
                             new IllegalArgumentException("Credential authenticator returned an invalid principal."));
                 }
-                return enrollmentStore
-                        .find(value.agentDid())
-                        .thenApply(enrollment -> enrollment.isPresent()
-                                        && enrollment.get().status() == AgentStatus.ACTIVE
-                                ? ProtectedResourceResult.authenticated(value)
-                                : ProtectedResourceResult.rejected(resourceProblem(ERROR_NOT_RECOGNIZED, resource)));
+                if (matched != null) {
+                    return completed(ProtectedResourceResult.rejected(resourceProblem(ERROR_NOT_RECOGNIZED, resource)));
+                }
+                return enrollmentStore.find(value.agentDid()).thenCompose(enrollment -> {
+                    if (enrollment.isEmpty() || enrollment.get().status() != AgentStatus.ACTIVE) {
+                        return completed(
+                                ProtectedResourceResult.rejected(resourceProblem(ERROR_NOT_RECOGNIZED, resource)));
+                    }
+                    return authenticateCredential(methods, index + 1, input, true, resource, value);
+                });
             });
         });
     }
@@ -773,11 +786,8 @@ public final class AepService {
             try {
                 recognized.add(AepHttp.parseAuthorization(value, AuthorizationCarrier.STANDARD));
             } catch (IllegalArgumentException exception) {
-                // Unrelated Authorization schemes remain available to other protocols. A value that
-                // names an AEP scheme is not one of those: under CORE-PR-038 it is a malformed AEP
-                // presentation rather than an absent one, which answers not_recognized instead of
-                // authentication_required.
-                if (namesAepScheme(value)) return Presentation.invalid();
+                // API-key verifiers compare the complete field value without parsing its scheme.
+                continue;
             }
         }
         if (recognized.size() > SINGLE_VALUE || (recognized.size() == SINGLE_VALUE && standard.size() > SINGLE_VALUE))

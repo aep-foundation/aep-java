@@ -413,12 +413,18 @@ final class AepCoreConformanceTest {
         assertTrue(AepValidation.grantResponse(new GrantResponses.ApiKey(
                         "key-value", "credential-1", "2026-09-01T12:00:00Z", "x-api-key", List.of("read")))
                 .isEmpty());
-        for (String apiKey : List.of("key value", "key\"value", "key,value", "key;value", "key\\value", "key\u0001")) {
+        for (String apiKey : List.of(" key", "key ", "key\n", "key\r", "key\tvalue", "key\u0000", "key\u007f", "kéy")) {
             assertTrue(
                     paths(AepValidation.grantResponse(new GrantResponses.ApiKey(
                                     apiKey, "credential-1", "2026-09-01T12:00:00Z", "x-api-key", null)))
                             .contains("$.api_key"),
                     apiKey);
+        }
+        for (String apiKey :
+                List.of("k", "Bearer secret", "key  value", "key\"value", "key,value", "key;value", "key\\value")) {
+            assertTrue(AepValidation.grantResponse(new GrantResponses.ApiKey(
+                            apiKey, "credential-1", "2026-09-01T12:00:00Z", "Authorization", null))
+                    .isEmpty());
         }
         assertTrue(paths(AepValidation.grantResponse(
                         new GrantResponses.ApiKey("key", "credential-1", "2026-09-01T12:00:00Z", "bad header", null)))
@@ -435,6 +441,16 @@ final class AepCoreConformanceTest {
         assertTrue(paths(AepValidation.grantResponse(new GrantResponses.OAuthBearer(
                         "token", "credential-1", "2026-09-01T12:00:00Z", null, "saml", "Bearer")))
                 .contains("$.token_format"));
+        for (String tokenType : List.of("Bearer", "bearer", "BEARER", "bEaReR")) {
+            assertTrue(AepValidation.grantResponse(new GrantResponses.OAuthBearer(
+                            "CaseSensitiveToken", "credential-1", "2026-09-01T12:00:00Z", null, tokenType))
+                    .isEmpty());
+        }
+        for (String tokenType : List.of("Basic", " Bearer", "Bearer ", "Bearer\n", "")) {
+            assertTrue(paths(AepValidation.grantResponse(new GrantResponses.OAuthBearer(
+                            "CaseSensitiveToken", "credential-1", "2026-09-01T12:00:00Z", null, tokenType)))
+                    .contains("$.token_type"));
+        }
         assertTrue(AepValidation.grantResponse(new GrantResponses.OAuthBearer(
                         "token", "credential-1", "2026-09-01T12:00:00Z", List.of(), "jwt", "Bearer"))
                 .isEmpty());

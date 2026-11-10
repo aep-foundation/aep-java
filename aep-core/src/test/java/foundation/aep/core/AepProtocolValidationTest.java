@@ -118,9 +118,15 @@ final class AepProtocolValidationTest {
         assertFalse(AepValidation.grantResponse(
                         new GrantResponses.ApiKey("secret value", "credential-1", expiration, "invalid header", null))
                 .isEmpty());
-        assertFalse(
+        assertTrue(
                 AepValidation.grantResponse(new GrantResponses.Basic("credential-1", expiration, "", "", List.of(), ""))
                         .isEmpty());
+        assertFalse(AepValidation.grantResponse(
+                        new GrantResponses.Basic("credential-1", expiration, null, "", List.of(), ""))
+                .isEmpty());
+        assertFalse(AepValidation.grantResponse(
+                        new GrantResponses.Basic("credential-1", expiration, "", "", List.of(), null))
+                .isEmpty());
         assertFalse(AepValidation.grantResponse(
                         new GrantResponses.Basic("credential-1", expiration, "secret\n", null, null, "agent:name"))
                 .isEmpty());
