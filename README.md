@@ -110,6 +110,15 @@ The examples use process-local state and loopback HTTP so the complete flow is r
 external infrastructure. Follow the role-module guides before replacing those development
 boundaries in a production application.
 
+## API-key credentials
+
+For an `api-key` credential, `api_key` is the complete HTTP header value. If a Service returns
+`header: "Authorization"` and `api_key: "Bearer secret"`, the Agent sends exactly
+`Authorization: Bearer secret`. The SDK does not add or remove a prefix, split the value, or trim it.
+Internal spaces and printable ASCII punctuation are allowed; empty values, leading or trailing
+spaces, control characters, and non-ASCII characters are rejected. The selected API-key header
+is also preserved when the caller selects the dedicated AEP carrier.
+
 ## Development
 
 The Maven Wrapper provides the complete repository gate:

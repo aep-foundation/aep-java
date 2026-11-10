@@ -79,6 +79,64 @@ final class StoredCredentialGrantTypesTest {
     }
 
     @Test
+    void acceptsEmptyBasicUsernameAndPassword() {
+        for (List<String> values : List.of(List.of("", "secret"), List.of("user", ""), List.of("", ""))) {
+            String username = values.get(0);
+            String password = values.get(1);
+            StoredCredentialGrantType basic = StoredCredentialGrantTypes.basic(
+                    config(List.of()),
+                    (request, context) -> completed(new GrantResponses.Basic(
+                            "basic", NOW.plusSeconds(600).toString(), password, "", List.of(), username)),
+                    ServiceCredentialStore.inMemory());
+            AepService service = service(basic);
+            enroll(service);
+            grant(service, Aep.GRANT_TYPE_BASIC, "grant-basic");
+            String value = "Basic "
+                    + java.util.Base64.getEncoder()
+                            .encodeToString(
+                                    (username + ":" + password).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            assertAuthenticated(service, Map.of("Authorization", List.of(value)), "basic");
+            service.revoke(
+                            RevokeRequest.credential(Aep.GRANT_TYPE_BASIC, "basic"),
+                            CommandOptions.idempotent("revoke-basic", "revoke-basic"))
+                    .toCompletableFuture()
+                    .join();
+            assertRejected(service, Map.of("Authorization", List.of(value)), "not_recognized");
+        }
+    }
+
+    @Test
+    void authenticatesOpaqueAuthorizationApiKeysWithoutSelectingAnOAuthOrBasicGrant() {
+        for (String value : List.of(
+                "Bearer secret",
+                "bearer secret",
+                "Basic secret",
+                "basic secret",
+                "Bearer two words",
+                "key,\";\\value")) {
+            ServiceCredentialStore store = ServiceCredentialStore.inMemory();
+            StoredCredentialGrantType apiKey = StoredCredentialGrantTypes.apiKey(
+                    config(List.of("authorization")),
+                    (request, context) -> completed(new GrantResponses.ApiKey(
+                            value, "api-1", NOW.plusSeconds(600).toString(), "Authorization", List.of())),
+                    store);
+            AepService service = service(apiKey);
+            enroll(service);
+            grant(service, Aep.GRANT_TYPE_API_KEY, "grant-api");
+            assertAuthenticated(service, Map.of("Authorization", List.of(value)), "api-1");
+            assertRejected(service, Map.of("Authorization", List.of("Bearer " + value)), "not_recognized");
+            assertRejected(service, Map.of("Authorization", List.of(value, value)), "not_recognized");
+            assertRejected(service, Map.of("Authorization", List.of(value + "\r\nInjected: true")), "not_recognized");
+            service.revoke(
+                            RevokeRequest.credential(Aep.GRANT_TYPE_API_KEY, "api-1"),
+                            CommandOptions.idempotent("revoke-api", "revoke-api-key"))
+                    .toCompletableFuture()
+                    .join();
+            assertRejected(service, Map.of("Authorization", List.of(value)), "not_recognized");
+        }
+    }
+
+    @Test
     void distinguishesMissingWrongHeaderAndInvalidSelectedApiKey() {
         ServiceCredentialStore store = ServiceCredentialStore.inMemory();
         StoredCredentialGrantType apiKey = StoredCredentialGrantTypes.apiKey(
@@ -93,6 +151,27 @@ final class StoredCredentialGrantTypesTest {
         assertRejected(service, Map.of(), "authentication_required");
         assertRejected(service, Map.of("X-Other-Key", List.of("api-secret")), "authentication_required");
         assertRejected(service, Map.of("X-Service-Key", List.of("wrong")), "not_recognized");
+    }
+
+    @Test
+    void verifiesSharedAuthorizationFieldsAndRejectsMultipleCredentialMatches() {
+        ServiceCredentialStore store = ServiceCredentialStore.inMemory();
+        StoredCredentialGrantType apiKey = StoredCredentialGrantTypes.apiKey(
+                config(List.of("authorization")),
+                (request, context) -> completed(new GrantResponses.ApiKey(
+                        "Bearer secret", "api-1", NOW.plusSeconds(600).toString(), "Authorization", List.of())),
+                store);
+        StoredCredentialGrantType oauth = StoredCredentialGrantTypes.oauthBearer(
+                config(List.of()),
+                (request, context) -> completed(new GrantResponses.OAuthBearer(
+                        "secret", "oauth-1", NOW.plusSeconds(600).toString(), List.of(), "Bearer")),
+                store);
+        AepService service = service(oauth, apiKey);
+        enroll(service);
+        grant(service, Aep.GRANT_TYPE_API_KEY, "grant-api");
+        assertAuthenticated(service, Map.of("Authorization", List.of("Bearer secret")), "api-1");
+        grant(service, Aep.GRANT_TYPE_OAUTH_BEARER, "grant-oauth");
+        assertRejected(service, Map.of("Authorization", List.of("Bearer secret")), "not_recognized");
     }
 
     @Test
@@ -183,9 +262,7 @@ final class StoredCredentialGrantTypesTest {
                 .toList();
         Map<String, InspectDocument.GrantTypeConfig> configs = new LinkedHashMap<>();
         for (StoredCredentialGrantType grantType : grantTypes) {
-            List<String> headers =
-                    Aep.GRANT_TYPE_API_KEY.equals(grantType.grantType()) ? List.of("x-service-key") : List.of();
-            configs.put(grantType.grantType(), config(headers));
+            configs.put(grantType.grantType(), grantType.config());
         }
         AepService.Builder builder = baseBuilder(document(names, configs));
         for (StoredCredentialGrantType grantType : grantTypes) builder.storedCredentialGrantType(grantType);

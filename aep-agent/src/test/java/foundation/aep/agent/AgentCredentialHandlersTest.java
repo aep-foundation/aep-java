@@ -19,7 +19,7 @@ final class AgentCredentialHandlersTest {
     void rendersEveryBuiltInCredentialWithoutDisclosingSecrets() {
         assertCredential(AgentCredentialHandlers.oauthBearer(), """
                 {"access_token":"bearer-secret","credential_id":"oauth-1",\
-                "expires_at":"2027-01-01T00:00:00Z","token_type":"Bearer"}
+                "expires_at":"2027-01-01T00:00:00Z","token_type":"bEaReR"}
                 """, Map.of("Authorization", "Bearer bearer-secret"));
         assertCredential(AgentCredentialHandlers.apiKey(), """
                 {"api_key":"api-secret","credential_id":"api-1",\
@@ -42,6 +42,14 @@ final class AgentCredentialHandlersTest {
                 """);
 
         assertThrows(IllegalArgumentException.class, () -> handler.authorizationHeaders(record, RESOURCE));
+    }
+
+    @Test
+    void preservesServiceSuppliedAuthorizationValue() {
+        assertCredential(AgentCredentialHandlers.apiKey(), """
+                {"api_key":"Bearer api-secret","credential_id":"api-1",\
+                "expires_at":"2027-01-01T00:00:00Z","header":"Authorization"}
+                """, Map.of("Authorization", "Bearer api-secret"));
     }
 
     @Test
